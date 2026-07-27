@@ -40,7 +40,7 @@ class TableSchemaFactoryTest {
         val finalTableName = TableName("namespace", "table")
         val tempTableName = TableName("namespace", "table_tmp")
 
-        every { mapper.toTempTableName(finalTableName) } returns tempTableName
+        every { mapper.toTempTableName(finalTableName, null) } returns tempTableName
         every { colNameResolver.getColumnNameMapping(inputSchema.keys) } returns columnNameMapping
         every { mapper.toColumnType(any()) } returns ColumnType("test_type", false)
         every { mapper.toFinalSchema(any()) } answers { firstArg<StreamTableSchema>() }

@@ -118,7 +118,7 @@ class DestinationStreamUTest {
 
     private fun a_stream_factory(): DestinationStreamFactory {
         val mockSchemaFactory = mockk<TableSchemaFactory>()
-        every { mockSchemaFactory.make(any(), any(), any()) } answers
+        every { mockSchemaFactory.make(any(), any(), any(), any()) } answers
             {
                 val finalTableName = firstArg<TableName>()
                 val inputSchema = secondArg<Map<String, FieldType>>()

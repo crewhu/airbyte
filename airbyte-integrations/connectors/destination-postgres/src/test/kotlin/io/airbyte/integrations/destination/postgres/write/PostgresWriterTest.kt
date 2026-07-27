@@ -68,7 +68,11 @@ class PostgresWriterTest {
         val stream = mockk<DestinationStream>()
         val finalTableName = TableName("ns", "name")
 
-        val tableNames = TableNames(finalTableName = finalTableName)
+        val tableNames =
+            TableNames(
+                finalTableName = finalTableName,
+                tempTableName = TableName("ns", "temp_name"),
+            )
         val columnSchema =
             ColumnSchema(
                 inputSchema = emptyMap(),
@@ -106,7 +110,11 @@ class PostgresWriterTest {
         val stream = mockk<DestinationStream>()
         val finalTableName = TableName("ns", "name")
 
-        val tableNames = TableNames(finalTableName = finalTableName)
+        val tableNames =
+            TableNames(
+                finalTableName = finalTableName,
+                tempTableName = TableName("ns", "temp_name"),
+            )
         val columnSchema =
             ColumnSchema(
                 inputSchema = emptyMap(),
@@ -147,7 +155,11 @@ class PostgresWriterTest {
         val stream = mockk<DestinationStream>()
         val finalTableName = TableName("ns", "name")
 
-        val tableNames = TableNames(finalTableName = finalTableName)
+        val tableNames =
+            TableNames(
+                finalTableName = finalTableName,
+                tempTableName = TableName("ns", "temp_name"),
+            )
         val columnSchema =
             ColumnSchema(
                 inputSchema = emptyMap(),

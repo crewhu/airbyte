@@ -112,7 +112,22 @@ class PostgresAirbyteClient(
     ) {
         val (createTableSql, createIndexesSql) =
             sqlGenerator.createTable(stream, tableName, columnNameMapping, replace)
-        execute(createTableSql)
+        try {
+            execute(createTableSql)
+        } catch (e: org.postgresql.util.PSQLException) {
+            // Handle race condition when multiple connections try to create the same temp table
+            // simultaneously, which can cause conflicts in PostgreSQL's internal type catalog
+            if (
+                e.message?.contains("pg_type_typname_nsp_index") == true ||
+                    e.message?.contains("duplicate key value") == true
+            ) {
+                log.debug(e) {
+                    "Table ${tableName.namespace}.${tableName.name} already exists (race condition), ignoring error"
+                }
+            } else {
+                throw e
+            }
+        }
         try {
             execute(createIndexesSql)
         } catch (e: org.postgresql.util.PSQLException) {
