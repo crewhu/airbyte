@@ -1,3 +1,98 @@
+# Crewhu fork — focus: `destination-postgres`
+
+> This is a fork of [airbytehq/airbyte](https://github.com/airbytehq/airbyte). The upstream
+> README follows below and is unchanged.
+
+The only connector actively worked on here is **`destination-postgres`**
+([`airbyte-integrations/connectors/destination-postgres/`](airbyte-integrations/connectors/destination-postgres/)).
+Everything else in this repo is upstream code we carry along but do not modify.
+
+We build and publish our own image of this connector and point our Airbyte
+deployment at it, so fixes can ship without waiting on an upstream release.
+
+## Building the connector image
+
+**The only requirement is a running Docker engine.** No JDK, no Gradle, no SDKMAN.
+
+```bash
+cd airbyte-integrations/connectors/destination-postgres
+
+# build locally, run the unit tests, publish nothing
+./build-and-push.sh --tag my-tag
+
+# build and publish to the registry (needs `docker login` first)
+./build-and-push.sh --tag my-tag --push
+
+# fast iteration, tests skipped
+./build-and-push.sh --tag wip --skip-tests
+```
+
+`./build-and-push.sh --help` lists every option.
+
+### Publishing
+
+Pushing needs a Docker Hub login, which is interactive:
+
+```bash
+docker login          # user: vsantos98
+./build-and-push.sh --tag my-tag --push
+```
+
+The script prints the published digest and the image reference to paste into
+Airbyte (destination → *Change docker image*):
+
+```
+vsantos98/destination-postgres:my-tag
+```
+
+**Use a new tag for each build.** Reusing a tag makes rollback impossible and
+lets Airbyte serve a cached image instead of the one you just pushed. The
+script warns and asks for confirmation before overwriting a tag that already
+exists in the registry.
+
+Before publishing, it verifies the image architecture and runs the connector's
+`spec` command; if either fails it aborts rather than pushing a broken image.
+
+### How the build works, and why
+
+The Airbyte build needs **JDK 21 specifically** — the Gradle plugins reject
+anything older, and Gradle 8.14 cannot read class files produced by Java 26+.
+That made builds depend on whichever JDK a given machine happened to have.
+[`Dockerfile.builder`](airbyte-integrations/connectors/destination-postgres/Dockerfile.builder)
+pins that toolchain so the host's Java version is irrelevant.
+
+The build runs in two stages:
+
+1. **Compile in the container** — produces `build/distributions/airbyte-app.tar`.
+2. **Assemble the image on the host** — `docker buildx` turns that tar into the
+   connector image, cross-building for `linux/amd64`.
+
+They are split on purpose. Building the image inside the container would need
+Docker-in-Docker; this way the container never needs a daemon or a mounted
+socket. The Gradle cache lives in a named volume (`airbyte-connector-gradle-cache`),
+so only the first build pays the dependency download.
+
+## Local changes to the connector
+
+Both changes live on `feature/fix_temp_table_collision`.
+
+**Unique temp table names.** Temp table names in the Direct Load (v3) path were
+derived only from the stream name, so concurrent connections syncing the same
+stream into the same schema dropped each other's temp tables mid-job. The name
+hash now includes a connection-scoped id (`CONNECTION_ID` env var, `syncId`, or
+a per-worker random fallback).
+
+**No indexes on temp tables.** Every job was issuing three `CREATE INDEX`
+statements (primary key, cursor, `_airbyte_extracted_at`) against the temp table
+it had just created — taking a `SHARE` lock and making the subsequent `COPY` pay
+index maintenance per row. None of those indexes can ever be used: the temp
+table is read exactly once, in full, by the dedup CTE in `upsertTable`, which is
+a `ROW_NUMBER()` window over the whole table with no `WHERE` clause. Postgres
+plans that as a sequential scan plus a sort regardless of indexes. Indexes on
+the real table are untouched.
+
+---
+
 <p align="center">
   <a href="https://airbyte.com"><img src="https://assets.website-files.com/605e01bc25f7e19a82e74788/624d9c4a375a55100be6b257_Airbyte_logo_color_dark.svg" alt="Airbyte"></a>
 </p>
