@@ -13,6 +13,7 @@ import io.airbyte.cdk.load.data.ObjectType
 import io.airbyte.cdk.load.data.StringType
 import io.airbyte.cdk.load.data.TimestampTypeWithTimezone
 import io.airbyte.cdk.load.schema.model.TableName
+import io.airbyte.cdk.load.schema.model.TableNames
 import io.airbyte.cdk.load.table.CDC_DELETED_AT_COLUMN
 import io.airbyte.cdk.load.table.ColumnNameMapping
 import io.airbyte.integrations.destination.postgres.spec.CdcDeletionMode
@@ -62,7 +63,7 @@ internal class PostgresDirectLoadSqlGeneratorTest {
 
         val (createTableSql, createIndexesSql) =
             postgresDirectLoadSqlGenerator.createTable(
-                stream = stream,
+                stream = stream.withRealTable(tableName),
                 tableName = tableName,
                 columnNameMapping = columnNameMapping,
                 replace = true
@@ -90,6 +91,22 @@ internal class PostgresDirectLoadSqlGeneratorTest {
 
         assertEqualsIgnoreWhitespace(expectedTableSql, createTableSql)
         assertEqualsIgnoreWhitespace(expectedIndexesSql, createIndexesSql)
+    }
+
+    /**
+     * Stubs [DestinationStream.tableSchema] so that [tableName] is seen as the stream's real
+     * table. Index generation is skipped for anything that isn't the final table, so tests that
+     * assert on index SQL have to say which table is the real one.
+     */
+    private fun DestinationStream.withRealTable(tableName: TableName) = apply {
+        every { tableSchema } returns
+            mockk {
+                every { tableNames } returns
+                    TableNames(
+                        finalTableName = tableName,
+                        tempTableName = tableName.copy(name = tableName.name + "_airbyte_tmp"),
+                    )
+            }
     }
 
     private fun assertEqualsIgnoreWhitespace(expected: String, actual: String) {
@@ -123,7 +140,7 @@ internal class PostgresDirectLoadSqlGeneratorTest {
 
         val (createTableSql, createIndexesSql) =
             postgresDirectLoadSqlGenerator.createTable(
-                stream = stream,
+                stream = stream.withRealTable(tableName),
                 tableName = tableName,
                 columnNameMapping = columnNameMapping,
                 replace = false
@@ -152,6 +169,62 @@ internal class PostgresDirectLoadSqlGeneratorTest {
     }
 
     @Test
+    fun testCreateTempTableCreatesNoIndexes() {
+        val realTableName = TableName(namespace = "test_schema", name = "test_table")
+        val tempTableName = TableName(namespace = "test_schema", name = "test_table_abc123")
+        val stream =
+            mockk<DestinationStream> {
+                every { schema } returns
+                    ObjectType(
+                        properties =
+                            linkedMapOf(
+                                "id" to FieldType(IntegerType, nullable = true),
+                                "updatedAt" to FieldType(TimestampTypeWithTimezone, nullable = true)
+                            )
+                    )
+                every { importType } returns
+                    Dedupe(primaryKey = listOf(listOf("id")), cursor = listOf("updatedAt"))
+                every { tableSchema } returns
+                    mockk {
+                        every { tableNames } returns
+                            TableNames(
+                                finalTableName = realTableName,
+                                tempTableName = tempTableName,
+                            )
+                    }
+            }
+
+        val (createTableSql, createIndexesSql) =
+            postgresDirectLoadSqlGenerator.createTable(
+                stream = stream,
+                tableName = tempTableName,
+                columnNameMapping = ColumnNameMapping(emptyMap()),
+                replace = true
+            )
+
+        // The temp table itself is still created...
+        assertEqualsIgnoreWhitespace(
+            """
+            BEGIN TRANSACTION;
+            DROP TABLE IF EXISTS "test_schema"."test_table_abc123";
+            CREATE TABLE IF NOT EXISTS "test_schema"."test_table_abc123" (
+            "_airbyte_raw_id" varchar NOT NULL,
+            "_airbyte_extracted_at" timestamp with time zone NOT NULL,
+            "_airbyte_meta" jsonb NOT NULL,
+            "_airbyte_generation_id" bigint NOT NULL,
+            "id" bigint,
+            "updatedAt" timestamp with time zone
+            );
+            COMMIT;
+            """,
+            createTableSql
+        )
+
+        // ...but with no indexes: the dedup CTE full-scans it, so none would be used.
+        assertEqualsIgnoreWhitespace("", createIndexesSql)
+    }
+
+    @Test
     fun testCreateTableWithPrimaryKeysAndCursor() {
         val stream =
             mockk<DestinationStream> {
@@ -172,7 +245,7 @@ internal class PostgresDirectLoadSqlGeneratorTest {
 
         val (createTableSql, createIndexesSql) =
             postgresDirectLoadSqlGenerator.createTable(
-                stream = stream,
+                stream = stream.withRealTable(tableName),
                 tableName = tableName,
                 columnNameMapping = columnNameMapping,
                 replace = true
@@ -235,7 +308,7 @@ internal class PostgresDirectLoadSqlGeneratorTest {
 
         val (createTableSql, createIndexesSql) =
             rawModeSqlGenerator.createTable(
-                stream = stream,
+                stream = stream.withRealTable(tableName),
                 tableName = tableName,
                 columnNameMapping = columnNameMapping,
                 replace = true
