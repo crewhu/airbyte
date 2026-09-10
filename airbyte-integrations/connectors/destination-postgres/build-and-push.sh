@@ -104,6 +104,13 @@ done
 LOCAL_IMAGE="${CONNECTOR_NAME}-local:${TAG}"
 REMOTE_IMAGE="${REGISTRY_REPO}:${TAG}"
 
+# Short commit, with a marker when the tree has uncommitted changes — so a
+# stamped image can always be traced back to source.
+GIT_SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo 'nogit')"
+if ! git -C "$REPO_ROOT" diff --quiet HEAD -- "$CONNECTOR_DIR" 2>/dev/null; then
+    GIT_SHA="${GIT_SHA}-dirty"
+fi
+
 # ---------------------------------------------------------------------------
 # Preflight
 # ---------------------------------------------------------------------------
@@ -157,8 +164,31 @@ else
     warn "tests skipped (--skip-tests)"
 fi
 
+# Stamp the build tag into the source so the connector can log which image it
+# is. The Airbyte UI only shows the tag that is *configured*; that is not proof
+# of what a pod actually pulled. The placeholder is restored on exit, including
+# on failure, so the working tree is never left modified.
+VERSION_FILE="$CONNECTOR_DIR/src/main/kotlin/io/airbyte/integrations/destination/postgres/PostgresDestinationV2.kt"
+BUILD_STAMP="${TAG} (${GIT_SHA})"
+
+restore_version_file() {
+    if [[ -n "${VERSION_FILE_BACKUP:-}" && -f "$VERSION_FILE_BACKUP" ]]; then
+        mv "$VERSION_FILE_BACKUP" "$VERSION_FILE"
+    fi
+}
+trap restore_version_file EXIT
+
+VERSION_FILE_BACKUP="$(mktemp)"
+cp "$VERSION_FILE" "$VERSION_FILE_BACKUP"
+# The stamp contains no '|', so it is safe as a sed delimiter here.
+sed -i.bak "s|@BUILD_TAG@|${BUILD_STAMP}|" "$VERSION_FILE" && rm -f "${VERSION_FILE}.bak"
+
+grep -q "$BUILD_STAMP" "$VERSION_FILE" \
+    || die "failed to stamp the build tag into $(basename "$VERSION_FILE")"
+
 step "Compiling connector in container"
 info "tasks: $GRADLE_TASKS"
+info "build stamp: $BUILD_STAMP"
 
 # --no-daemon: the container is discarded anyway, and a lingering daemon would
 # hold the cache volume open.
