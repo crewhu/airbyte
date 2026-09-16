@@ -156,7 +156,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/gradle-connector-cache
-          key: gradle-connector-${{ hashFiles('**/gradle-wrapper.properties', 'deps.toml') }}
+          # Caminho exato, sem glob '**': na fase de save (pós-job) o workspace
+          # está cheio de arquivos root-owned escritos pelo container do build,
+          # e o hashFiles quebra ao varrê-los ("Fail to hash files").
+          key: gradle-connector-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-connector-
 
       - name: Preparar volume de cache do builder
