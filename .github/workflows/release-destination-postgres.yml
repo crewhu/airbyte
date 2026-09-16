@@ -13,6 +13,8 @@
 # Requisitos (uma vez só, em Settings → Secrets and variables → Actions):
 #   DOCKERHUB_USERNAME  usuário do Docker Hub (ex.: vsantos98)
 #   DOCKERHUB_TOKEN     access token com permissão de write no repositório
+#   SLACK_WEBHOOK_URL   (opcional) Incoming Webhook do canal que recebe o
+#                       status da execução; sem ele a notificação é pulada
 
 name: Release destination-postgres
 
@@ -234,19 +236,119 @@ jobs:
           echo "Uso de disco do Docker após a limpeza:"
           docker system df || true
 
-      - name: Resumo
+      - name: Sumário consolidado
+        id: summary
         if: always()
         env:
           VERSION: ${{ steps.version.outputs.version }}
           PUSH: ${{ inputs.push_image }}
           RELEASE: ${{ inputs.release }}
+          BRANCH: ${{ inputs.branch }}
+          JOB_STATUS: ${{ job.status }}
         run: |
+          set -uo pipefail
+          VERSION="${VERSION:-n/a}"
+          IMAGE="$REGISTRY_REPO:$VERSION"
+          IMAGE_URL="https://hub.docker.com/r/$REGISTRY_REPO/tags?name=$VERSION"
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "n/a")
+          COMMIT_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$COMMIT"
+
+          # O digest vem do registry (não do daemon local), então continua
+          # disponível mesmo depois da limpeza de imagens do runner.
+          DIGEST="n/a"
+          if [[ "$JOB_STATUS" == "success" && "$PUSH" == "true" && "$VERSION" != "n/a" ]]; then
+            DIGEST=$(docker buildx imagetools inspect "$IMAGE" \
+                       --format '{{.Manifest.Digest}}' 2>/dev/null || echo "indisponível")
+          fi
+
+          GIT_TAG="n/a"
+          RELEASE_URL="n/a"
+          if [[ "$RELEASE" == "true" && "$VERSION" != "n/a" ]]; then
+            GIT_TAG="destination-postgres-$VERSION"
+            RELEASE_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$GIT_TAG"
+          fi
+
+          MODE="build de teste"
+          [[ "$RELEASE" == "true" ]] && MODE="release"
+
           {
-            echo "## destination-postgres — build"
+            echo "status=$JOB_STATUS"
+            echo "mode=$MODE"
+            echo "version=$VERSION"
+            echo "image=$IMAGE"
+            echo "image_url=$IMAGE_URL"
+            echo "digest=$DIGEST"
+            echo "git_tag=$GIT_TAG"
+            echo "release_url=$RELEASE_URL"
+            echo "commit=$COMMIT"
+            echo "commit_url=$COMMIT_URL"
+            echo "run_url=$RUN_URL"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## destination-postgres — $MODE"
             echo ""
             echo "| Campo | Valor |"
             echo "|---|---|"
-            echo "| Imagem | \`$REGISTRY_REPO:${VERSION:-n/a}\` |"
+            echo "| Status | $JOB_STATUS |"
+            echo "| Versão | \`$VERSION\` |"
+            echo "| Imagem | [\`$IMAGE\`]($IMAGE_URL) |"
+            echo "| Digest | \`$DIGEST\` |"
+            echo "| Tag git | \`$GIT_TAG\` |"
+            echo "| Branch | \`$BRANCH\` |"
+            echo "| Commit | [\`${COMMIT:0:11}\`]($COMMIT_URL) |"
             echo "| Publicada | $PUSH |"
-            echo "| Release | $RELEASE |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notificar Slack
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          STATUS: ${{ steps.summary.outputs.status }}
+          MODE: ${{ steps.summary.outputs.mode }}
+          VERSION: ${{ steps.summary.outputs.version }}
+          IMAGE: ${{ steps.summary.outputs.image }}
+          IMAGE_URL: ${{ steps.summary.outputs.image_url }}
+          DIGEST: ${{ steps.summary.outputs.digest }}
+          GIT_TAG: ${{ steps.summary.outputs.git_tag }}
+          RELEASE_URL: ${{ steps.summary.outputs.release_url }}
+          BRANCH: ${{ inputs.branch }}
+          COMMIT: ${{ steps.summary.outputs.commit }}
+          COMMIT_URL: ${{ steps.summary.outputs.commit_url }}
+          RUN_URL: ${{ steps.summary.outputs.run_url }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SLACK_WEBHOOK_URL:-}" ]]; then
+            echo "::warning::secret SLACK_WEBHOOK_URL não configurado; notificação do Slack pulada"
+            exit 0
+          fi
+
+          case "$STATUS" in
+            success)   EMOJI="✅" ;;
+            cancelled) EMOJI="⚠️" ;;
+            *)         EMOJI="❌" ;;
+          esac
+          HEADER="$EMOJI destination-postgres — $MODE ($STATUS)"
+
+          LINES="*Versão:* \`$VERSION\`
+          *Imagem:* <$IMAGE_URL|\`$IMAGE\`>
+          *Digest:* \`$DIGEST\`"
+          if [[ "$GIT_TAG" != "n/a" ]]; then
+            LINES="$LINES
+          *Tag git:* <$RELEASE_URL|\`$GIT_TAG\`>"
+          fi
+          LINES="$LINES
+          *Branch:* \`$BRANCH\` — <$COMMIT_URL|\`${COMMIT:0:11}\`>
+          *Execução:* <$RUN_URL|ver logs no GitHub Actions>"
+
+          PAYLOAD=$(jq -n --arg header "$HEADER" --arg text "$LINES" '{
+            blocks: [
+              { type: "header",  text: { type: "plain_text", text: $header, emoji: true } },
+              { type: "section", text: { type: "mrkdwn", text: ($text | gsub("\n +"; "\n")) } }
+            ]
+          }')
+
+          curl -fsS -X POST -H 'Content-type: application/json' \
+            --data "$PAYLOAD" "$SLACK_WEBHOOK_URL" >/dev/null
+          echo "Notificação enviada ao Slack."
