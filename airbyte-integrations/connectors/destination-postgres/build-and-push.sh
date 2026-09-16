@@ -186,6 +186,14 @@ sed -i.bak "s|@BUILD_TAG@|${BUILD_STAMP}|" "$VERSION_FILE" && rm -f "${VERSION_F
 grep -q "$BUILD_STAMP" "$VERSION_FILE" \
     || die "failed to stamp the build tag into $(basename "$VERSION_FILE")"
 
+# Pre-create the docker build context BEFORE the builder container runs.
+# Gradle runs as root inside the container; on Linux hosts (CI runners) that
+# makes everything it creates under build/ root-owned, and creating this
+# directory afterwards fails with EACCES. Created here, it stays owned by the
+# invoking user; root writing inside it later is not a problem.
+DOCKER_CONTEXT="$CONNECTOR_DIR/build/airbyte/docker"
+mkdir -p "$DOCKER_CONTEXT"
+
 step "Compiling connector in container"
 info "tasks: $GRADLE_TASKS"
 info "build stamp: $BUILD_STAMP"
@@ -226,8 +234,8 @@ info "platform: $PLATFORM"
 info "tag:      $LOCAL_IMAGE"
 
 # Stage the build context the way the Gradle docker task would.
-DOCKER_CONTEXT="$CONNECTOR_DIR/build/airbyte/docker"
-mkdir -p "$DOCKER_CONTEXT"
+# ($DOCKER_CONTEXT was pre-created before the compile step — see the
+# ownership note there.)
 cp "$DIST_TAR" "$DOCKER_CONTEXT/airbyte-app.tar"
 cp "$REPO_ROOT/docker-images/Dockerfile.java-connector-non-airbyte-ci" "$DOCKER_CONTEXT/Dockerfile"
 
