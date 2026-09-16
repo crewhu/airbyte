@@ -16,7 +16,9 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 
 class DestinationLifecycleTest {
 
@@ -63,6 +65,51 @@ class DestinationLifecycleTest {
         coVerify(exactly = 1) { streamLoader1.teardown(true) }
         coVerify(exactly = 1) { streamLoader2.teardown(true) }
         coVerify(exactly = 1) { destinationInitializer.teardown() }
+    }
+
+    @Test
+    fun `finalizes stream loaders when the pipeline fails, then rethrows`() = runTest {
+        // Given
+        val streamLoader1 = mockk<StreamLoader>(relaxed = true)
+        val streamLoader2 = mockk<StreamLoader>(relaxed = true)
+        val stream1 = mockk<DestinationStream>(relaxed = true)
+        val stream2 = mockk<DestinationStream>(relaxed = true)
+        val pipelineFailure = RuntimeException("pipeline blew up")
+
+        every { completionTracker.allStreamsComplete() } returns false
+        every { destinationCatalog.streams } returns listOf(stream1, stream2)
+        coEvery { destinationInitializer.createStreamLoader(stream1) } returns streamLoader1
+        coEvery { destinationInitializer.createStreamLoader(stream2) } returns streamLoader2
+        coEvery { pipeline.run() } throws pipelineFailure
+
+        // When
+        val thrown = assertThrows<RuntimeException> { destinationLifecycle.run() }
+
+        // Then: the pipeline failure is what propagates, and every loader was still
+        // finalized (exceptionally), so temp tables get dropped instead of orphaned.
+        assertEquals(pipelineFailure, thrown)
+        coVerify(exactly = 1) { streamLoader1.teardown(false) }
+        coVerify(exactly = 1) { streamLoader2.teardown(false) }
+        coVerify(exactly = 1) { destinationInitializer.teardown() }
+    }
+
+    @Test
+    fun `pipeline failure propagates even when finalization also fails`() = runTest {
+        // Given
+        val streamLoader1 = mockk<StreamLoader>(relaxed = true)
+        val stream1 = mockk<DestinationStream>(relaxed = true)
+        val pipelineFailure = RuntimeException("pipeline blew up")
+
+        every { completionTracker.allStreamsComplete() } returns false
+        every { destinationCatalog.streams } returns listOf(stream1)
+        coEvery { destinationInitializer.createStreamLoader(stream1) } returns streamLoader1
+        coEvery { pipeline.run() } throws pipelineFailure
+        coEvery { streamLoader1.teardown(any()) } throws
+            IllegalStateException("db connection is gone")
+
+        // When / Then: the cleanup failure must not mask the original pipeline failure.
+        val thrown = assertThrows<RuntimeException> { destinationLifecycle.run() }
+        assertEquals(pipelineFailure, thrown)
     }
 
     @Test
