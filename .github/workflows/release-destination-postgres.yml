@@ -197,9 +197,13 @@ jobs:
           set -euo pipefail
           git push origin "HEAD:refs/heads/$BRANCH"
 
+          # A tag NÃO é criada com git push: quando o commit taggeado carrega
+          # mudanças em .github/workflows/, o GitHub valida o push contra o
+          # escopo `workflows` — que o GITHUB_TOKEN não tem — e rejeita
+          # ("Unable to determine if workflow can be created or updated").
+          # O gh release create cria a tag via API de Releases, que não passa
+          # por essa validação.
           TAG="destination-postgres-$VERSION"
-          git tag -a "$TAG" -m "destination-postgres $VERSION"
-          git push origin "$TAG"
 
           DIGEST=$(docker buildx imagetools inspect "$REGISTRY_REPO:$VERSION" \
                      --format '{{.Manifest.Digest}}' 2>/dev/null || echo "indisponível")
