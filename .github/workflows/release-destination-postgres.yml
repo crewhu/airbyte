@@ -13,6 +13,14 @@
 # Requisitos (uma vez só, em Settings → Secrets and variables → Actions):
 #   DOCKERHUB_USERNAME  usuário do Docker Hub (ex.: vsantos98)
 #   DOCKERHUB_TOKEN     access token com permissão de write no repositório
+#   RELEASE_TOKEN       PAT para criar a tag git e o GitHub Release. O
+#                       GITHUB_TOKEN do Actions não serve: como o histórico
+#                       dos branches carrega mudanças em .github/workflows/,
+#                       o GitHub exige o escopo `workflows` tanto no push da
+#                       tag quanto na criação dela via API de Releases (403
+#                       "Resource not accessible by integration").
+#                       Fine-grained PAT no repo com Contents: Read/write +
+#                       Workflows: Read/write — ou classic com repo+workflow.
 #   SLACK_WEBHOOK_URL   (opcional) Incoming Webhook do canal que recebe o
 #                       status da execução; sem ele a notificação é pulada
 
@@ -65,6 +73,7 @@ jobs:
           RELEASE: ${{ inputs.release }}
           PUSH: ${{ inputs.push_image }}
           TESTS: ${{ inputs.run_tests }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           # Uma release sem publicar ou sem testar não é uma release.
           if [[ "$RELEASE" == "true" && "$PUSH" != "true" ]]; then
@@ -72,6 +81,13 @@ jobs:
           fi
           if [[ "$RELEASE" == "true" && "$TESTS" != "true" ]]; then
             echo "::error::release=true exige run_tests=true"; exit 1
+          fi
+          # Checado ANTES do build: descobrir a falta do token só depois de
+          # buildar e publicar a imagem deixa a release pela metade (imagem
+          # no registry, sem tag nem GitHub Release) — runs 35138983055 e
+          # 35143532374.
+          if [[ "$RELEASE" == "true" && -z "$RELEASE_TOKEN" ]]; then
+            echo "::error::release=true exige o secret RELEASE_TOKEN (PAT com Contents+Workflows write); o GITHUB_TOKEN não consegue criar a tag/release neste repo"; exit 1
           fi
 
       - name: Checkout do branch selecionado
@@ -192,17 +208,16 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
           BRANCH: ${{ inputs.branch }}
-          GH_TOKEN: ${{ github.token }}
+          # PAT, não github.token: criar a tag (via push ou via API de
+          # Releases) exige o escopo `workflows` porque o histórico contém
+          # mudanças em .github/workflows/ — o GITHUB_TOKEN leva 403.
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           set -euo pipefail
           git push origin "HEAD:refs/heads/$BRANCH"
 
-          # A tag NÃO é criada com git push: quando o commit taggeado carrega
-          # mudanças em .github/workflows/, o GitHub valida o push contra o
-          # escopo `workflows` — que o GITHUB_TOKEN não tem — e rejeita
-          # ("Unable to determine if workflow can be created or updated").
-          # O gh release create cria a tag via API de Releases, que não passa
-          # por essa validação.
+          # A tag é criada pelo gh release create (API de Releases), com o
+          # RELEASE_TOKEN acima.
           TAG="destination-postgres-$VERSION"
 
           DIGEST=$(docker buildx imagetools inspect "$REGISTRY_REPO:$VERSION" \
