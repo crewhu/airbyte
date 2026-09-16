@@ -6,8 +6,8 @@ data:
   connectorSubtype: database
   connectorType: destination
   definitionId: 25c5221d-dce2-4163-ade9-739ef790f503
-  dockerImageTag: 3.0.5
-  dockerRepository: airbyte/destination-postgres
+  dockerImageTag: 3.0.5-crewhu.8
+  dockerRepository: airbyte/destination-postgres-vini
   documentationUrl: https://docs.airbyte.com/integrations/destinations/postgres
   githubIssueLabel: destination-postgres
   icon: postgresql.svg

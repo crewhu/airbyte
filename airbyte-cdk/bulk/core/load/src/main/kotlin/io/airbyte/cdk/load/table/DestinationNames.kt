@@ -14,6 +14,15 @@ import org.apache.commons.codec.digest.DigestUtils
 // @Deprecated("Deprecated in favor of TableSchemaMapper")
 fun interface TempTableNameGenerator {
     fun generate(originalName: TableName): TableName
+
+    /**
+     * Generates a temporary table name with an optional unique identifier.
+     * The uniqueId should be connection-specific (e.g., syncId) to avoid collisions
+     * between concurrent jobs operating on the same stream.
+     */
+    fun generate(originalName: TableName, uniqueId: String?): TableName {
+        return generate(originalName)
+    }
 }
 
 /**
@@ -34,18 +43,29 @@ open class DefaultTempTableNameGenerator(
     private val hashLength: Int = 32,
 ) : TempTableNameGenerator {
     override fun generate(originalName: TableName): TableName {
+        return generate(originalName, null)
+    }
+
+    override fun generate(originalName: TableName, uniqueId: String?): TableName {
         val shortNamespace =
             originalName.namespace.takeFirstAndLastNChars(affixLength, separator = affixSeparator)
         val shortName =
             originalName.name.takeFirstAndLastNChars(affixLength, separator = affixSeparator)
-        val hash =
-            DigestUtils.sha256Hex(
-                    TypingDedupingUtil.concatenateRawTableName(
-                        originalName.namespace,
-                        originalName.name + TMP_TABLE_SUFFIX,
-                    ),
-                )
-                .take(hashLength)
+
+        // Include uniqueId in the hash to prevent collisions between concurrent jobs
+        val hashInput = if (uniqueId != null) {
+            TypingDedupingUtil.concatenateRawTableName(
+                originalName.namespace,
+                originalName.name + TMP_TABLE_SUFFIX,
+            ) + "_" + uniqueId
+        } else {
+            TypingDedupingUtil.concatenateRawTableName(
+                originalName.namespace,
+                originalName.name + TMP_TABLE_SUFFIX,
+            )
+        }
+
+        val hash = DigestUtils.sha256Hex(hashInput).take(hashLength)
         return TableName(
             name = "$shortNamespace$shortName$hash",
             namespace = internalNamespace ?: originalName.namespace,

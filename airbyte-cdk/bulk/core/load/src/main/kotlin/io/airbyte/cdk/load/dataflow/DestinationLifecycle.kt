@@ -37,8 +37,27 @@ class DestinationLifecycle(
         // propagate the schema updates
         val streamLoaders = initializeIndividualStreams()
 
-        // Move data
-        runBlocking { pipeline.run() }
+        try {
+            // Move data
+            runBlocking { pipeline.run() }
+        } catch (e: Throwable) {
+            // A pipeline failure used to propagate straight out of run(), so no stream loader
+            // ever got closed and every temp table the job had created was left behind — one
+            // orphan per stream per failed attempt, and nothing reclaims them since temp table
+            // names are unique per job. Finalize anyway: with streams incomplete, each loader's
+            // close() receives the failure, discards the load and drops its temp table.
+            try {
+                finalizeIndividualStreams(streamLoaders)
+                teardownDestination()
+            } catch (cleanupError: Exception) {
+                // Logged and swallowed so a cleanup failure (e.g. the DB connection died with
+                // the pipeline) cannot mask the pipeline failure being rethrown.
+                log.error(cleanupError) {
+                    "Stream finalization after pipeline failure also failed; temp tables may be left behind"
+                }
+            }
+            throw e
+        }
 
         finalizeIndividualStreams(streamLoaders)
 

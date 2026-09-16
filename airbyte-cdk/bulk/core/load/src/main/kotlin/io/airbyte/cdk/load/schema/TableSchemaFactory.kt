@@ -21,8 +21,9 @@ class TableSchemaFactory(
         finalTableName: TableName,
         inputSchema: Map<String, FieldType>,
         importType: ImportType,
+        uniqueId: String? = null,
     ): StreamTableSchema {
-        val tempTableName = mapper.toTempTableName(finalTableName)
+        val tempTableName = mapper.toTempTableName(finalTableName, uniqueId)
         val tableNames =
             TableNames(
                 finalTableName = finalTableName,

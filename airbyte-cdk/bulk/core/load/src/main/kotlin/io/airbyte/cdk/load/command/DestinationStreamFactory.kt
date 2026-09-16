@@ -15,6 +15,7 @@ import io.airbyte.protocol.models.v0.ConfiguredAirbyteStream
 import io.airbyte.protocol.models.v0.DestinationSyncMode
 import io.github.oshai.kotlinlogging.KotlinLogging
 import jakarta.inject.Singleton
+import java.util.UUID
 
 private val log = KotlinLogging.logger {}
 
@@ -24,6 +25,13 @@ class DestinationStreamFactory(
     private val namespaceMapper: NamespaceMapper,
     private val schemaFactory: TableSchemaFactory,
 ) {
+    // Per-worker fallback id. Concurrent jobs running in separate worker pods get
+    // different ids, which keeps temp table names isolated even when no stable
+    // identifier (CONNECTION_ID env var or non-zero syncId) is available.
+    private val workerFallbackUniqueId: String by lazy {
+        UUID.randomUUID().toString().take(8)
+    }
+
     fun make(stream: ConfiguredAirbyteStream, resolvedTableName: TableName): DestinationStream {
         val airbyteSchemaType = jsonSchemaToAirbyteType.convert(stream.stream.jsonSchema)
         val airbyteSchema: Map<String, FieldType> =
@@ -43,11 +51,18 @@ class DestinationStreamFactory(
                 DestinationSyncMode.UPDATE -> Update
                 DestinationSyncMode.SOFT_DELETE -> SoftDelete
             }
+        val syncId = stream.syncId ?: 0L
+        val tempTableUniqueId =
+            System.getenv("CONNECTION_ID")
+                ?: System.getenv("AIRBYTE_CONNECTION_ID")
+                ?: syncId.takeIf { it != 0L }?.toString()
+                ?: workerFallbackUniqueId
         val tableSchema =
             schemaFactory.make(
                 resolvedTableName,
                 airbyteSchema,
                 importType,
+                uniqueId = tempTableUniqueId,
             )
 
         return DestinationStream(
@@ -55,9 +70,9 @@ class DestinationStreamFactory(
             unmappedName = stream.stream.name,
             namespaceMapper = namespaceMapper,
             importType = importType,
-            generationId = stream.generationId,
-            minimumGenerationId = stream.minimumGenerationId,
-            syncId = stream.syncId,
+            generationId = stream.generationId ?: 0L,
+            minimumGenerationId = stream.minimumGenerationId ?: 0L,
+            syncId = syncId,
             schema = airbyteSchemaType,
             isFileBased = stream.stream.isFileBased ?: false,
             includeFiles = stream.includeFiles ?: false,

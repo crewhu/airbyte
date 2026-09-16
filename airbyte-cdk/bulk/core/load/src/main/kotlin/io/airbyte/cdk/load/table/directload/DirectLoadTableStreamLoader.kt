@@ -108,23 +108,44 @@ class DirectLoadTableDedupStreamLoader(
     }
 
     override suspend fun close(hadNonzeroRecords: Boolean, streamFailure: StreamProcessingFailed?) {
-        if (initialStatus.realTable != null) {
-            schemaEvolutionClient.ensureSchemaMatches(stream, realTableName, columnNameMapping)
-        } else {
-            tableOperationsClient.createTable(
+        // The temp table has to be dropped whatever happens, so a failed stream does not leave it
+        // behind. Temp table names carry a per-connection unique id, so an orphan is never reused
+        // or overwritten by a later job -- it just accumulates. Nothing else sweeps them up.
+        try {
+            if (streamFailure != null) {
+                logger.warn {
+                    "Stream ${stream.mappedDescriptor.toPrettyString()} did not complete; discarding temp table ${tempTableName.toPrettyString()} without upserting"
+                }
+                return
+            }
+
+            if (initialStatus.realTable != null) {
+                schemaEvolutionClient.ensureSchemaMatches(stream, realTableName, columnNameMapping)
+            } else {
+                tableOperationsClient.createTable(
+                    stream,
+                    realTableName,
+                    columnNameMapping,
+                    replace = true,
+                )
+            }
+            tableOperationsClient.upsertTable(
                 stream,
-                realTableName,
                 columnNameMapping,
-                replace = true,
+                sourceTableName = tempTableName,
+                targetTableName = realTableName,
             )
+        } finally {
+            // Cleanup must not mask the original failure: if the upsert threw, that exception has
+            // to reach the caller, not a secondary one from the drop.
+            try {
+                tableOperationsClient.dropTable(tempTableName)
+            } catch (e: Exception) {
+                logger.warn(e) {
+                    "Failed to drop temp table ${tempTableName.toPrettyString()} for stream ${stream.mappedDescriptor.toPrettyString()}; it will have to be removed manually"
+                }
+            }
         }
-        tableOperationsClient.upsertTable(
-            stream,
-            columnNameMapping,
-            sourceTableName = tempTableName,
-            targetTableName = realTableName,
-        )
-        tableOperationsClient.dropTable(tempTableName)
     }
 }
 

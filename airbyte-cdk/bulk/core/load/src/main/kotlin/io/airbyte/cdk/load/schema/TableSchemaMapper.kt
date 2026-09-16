@@ -30,6 +30,15 @@ interface TableSchemaMapper {
     fun toTempTableName(tableName: TableName): TableName
 
     /**
+     * Overload that accepts an optional unique identifier (e.g. the sync id or a per-connection
+     * key) so destinations can derive temp table names that are isolated across concurrent jobs
+     * while remaining stable across retries of the same sync. The default implementation ignores
+     * the identifier and delegates to [toTempTableName] for backward compatibility.
+     */
+    fun toTempTableName(tableName: TableName, uniqueId: String?): TableName =
+        toTempTableName(tableName)
+
+    /**
      * Transforms a column name from the input schema to comply with destination naming conventions.
      * This may include handling special characters, case transformations, or length limitations.
      *

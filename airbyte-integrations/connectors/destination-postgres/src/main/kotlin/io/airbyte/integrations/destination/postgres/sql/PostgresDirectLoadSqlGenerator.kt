@@ -77,12 +77,22 @@ class PostgresDirectLoadSqlGenerator(
      *
      * In legacyRawTablesOnly mode, primary key and cursor indexes are skipped because user-defined
      * columns don't exist at the table level (they're stored in _airbyte_data JSONB).
+     *
+     * No indexes are created on temp tables. A temp table is write-only during the load (it
+     * receives a COPY) and is then read exactly once, in full, by the dedup CTE in [upsertTable]:
+     * a ROW_NUMBER() window over the whole table with no WHERE clause. That plan is a sequential
+     * scan plus a sort regardless of indexes, so none of the three would ever be used. Creating
+     * them up front only makes the COPY pay index maintenance per row and takes an unnecessary
+     * SHARE lock. Indexes on the real table are unaffected.
      */
     private fun createIndexes(
         stream: DestinationStream,
         tableName: TableName,
         columnNameMapping: ColumnNameMapping
     ): String {
+        if (isTempTable(stream, tableName)) {
+            return ""
+        }
         // In raw tables mode, skip primary key and cursor indexes since those columns don't exist
         val primaryKeyIndexStatement =
             if (postgresConfiguration.legacyRawTablesOnly) {
@@ -106,6 +116,19 @@ class PostgresDirectLoadSqlGenerator(
             $cursorIndexStatement
             $extractedAtIndexStatement
         """
+    }
+
+    /**
+     * True when [tableName] is a transient table rather than the stream's real destination table.
+     *
+     * The comparison is positive on the real table name — anything that is not the final table is
+     * treated as transient. That covers both the stream's temp table and the "temp temp" table
+     * derived from it during a truncate refresh, whose names are opaque hashes and so cannot be
+     * recognized by suffix.
+     */
+    private fun isTempTable(stream: DestinationStream, tableName: TableName): Boolean {
+        val finalTableName = stream.tableSchema.tableNames.finalTableName ?: return false
+        return tableName != finalTableName
     }
 
     private fun getPrimaryKeysColumnNames(

@@ -62,6 +62,10 @@ class PostgresTableSchemaMapper(
         return tempTableNameGenerator.generate(tableName)
     }
 
+    override fun toTempTableName(tableName: TableName, uniqueId: String?): TableName {
+        return tempTableNameGenerator.generate(tableName, uniqueId)
+    }
+
     override fun toColumnName(name: String): String {
         return if (config.legacyRawTablesOnly) {
             name
