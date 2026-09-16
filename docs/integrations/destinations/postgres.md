@@ -298,6 +298,7 @@ _where_ it is deployed.
 
 | Version | Date       | Pull Request                                               | Subject                                                                                                                                                                                |
 |:--------|:-----------|:-----------------------------------------------------------|:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 3.0.5-crewhu.5 | 2026-09-16 | Crewhu fork (not upstream) | Automated release from branch bugfix/fix_temp_table_collision/lifecycle_finalize. |
 | 3.0.5-crewhu.4 | 2026-09-16 | Crewhu fork (not upstream) | Automated release from branch bugfix/fix_temp_table_collision/lifecycle_finalize. |
 | 3.0.5-crewhu.2 | 2026-09-10 | Crewhu fork (not upstream)    | Always drop the temp table on stream failure, so failed jobs no longer leave orphaned temp tables behind.                                                                                                                                                                  |
 | 3.0.5-crewhu.1 | 2026-09-10 | Crewhu fork (not upstream)    | Unique temp table names per connection; no indexes created on temp tables; build marker logged at startup.                                                                                                                                                                  |
