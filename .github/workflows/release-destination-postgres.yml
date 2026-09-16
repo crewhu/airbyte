@@ -1,0 +1,226 @@
+# Build & release do destination-postgres (fork Crewhu)
+#
+# Workflow manual (workflow_dispatch): você escolhe o branch, e ele compila,
+# testa, monta a imagem linux/amd64 e publica no Docker Hub — nada roda em
+# máquina local. Em modo release, também faz o bump do metadata.yaml, commita
+# no branch, cria a tag git e um GitHub Release.
+#
+# Este arquivo vive no master porque o GitHub só lista workflow_dispatch de
+# workflows presentes no branch default. O branch a buildar é um INPUT: o
+# checkout é feito nele, e o build usa o build-and-push.sh daquele branch —
+# então o workflow não precisa existir nos branches de trabalho.
+#
+# Requisitos (uma vez só, em Settings → Secrets and variables → Actions):
+#   DOCKERHUB_USERNAME  usuário do Docker Hub (ex.: vsantos98)
+#   DOCKERHUB_TOKEN     access token com permissão de write no repositório
+
+name: Release destination-postgres
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch a buildar (o build-and-push.sh precisa existir nele)"
+        required: true
+        default: feature/fix_temp_table_collision
+      version:
+        description: "Tag da imagem (ex.: 3.0.5-crewhu.3). Vazio: release auto-incrementa o crewhu.N do metadata.yaml; build de teste usa <branch>-<sha>"
+        required: false
+        default: ""
+      release:
+        description: "Release oficial: bump metadata.yaml + commit no branch + tag git + GitHub Release"
+        type: boolean
+        default: false
+      push_image:
+        description: "Publicar a imagem no Docker Hub"
+        type: boolean
+        default: true
+      run_tests:
+        description: "Rodar os testes unitários durante o build"
+        type: boolean
+        default: true
+
+# Uma release por vez; um segundo disparo espera em vez de competir pelo
+# mesmo número de versão.
+concurrency:
+  group: release-destination-postgres
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  REGISTRY_REPO: vsantos98/destination-postgres
+  CONNECTOR_DIR: airbyte-integrations/connectors/destination-postgres
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Validar combinação de inputs
+        env:
+          RELEASE: ${{ inputs.release }}
+          PUSH: ${{ inputs.push_image }}
+          TESTS: ${{ inputs.run_tests }}
+        run: |
+          # Uma release sem publicar ou sem testar não é uma release.
+          if [[ "$RELEASE" == "true" && "$PUSH" != "true" ]]; then
+            echo "::error::release=true exige push_image=true"; exit 1
+          fi
+          if [[ "$RELEASE" == "true" && "$TESTS" != "true" ]]; then
+            echo "::error::release=true exige run_tests=true"; exit 1
+          fi
+
+      - name: Checkout do branch selecionado
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 1
+
+      - name: Resolver versão
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE: ${{ inputs.release }}
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          set -euo pipefail
+          CURRENT=$(grep -E '^\s*dockerImageTag:' "$CONNECTOR_DIR/metadata.yaml" | awk '{print $2}')
+          if [[ "$RELEASE" == "true" ]]; then
+            if [[ -n "$INPUT_VERSION" ]]; then
+              VERSION="$INPUT_VERSION"
+            elif [[ "$CURRENT" =~ ^(.*-crewhu\.)([0-9]+)$ ]]; then
+              VERSION="${BASH_REMATCH[1]}$((BASH_REMATCH[2]+1))"
+            else
+              VERSION="${CURRENT}-crewhu.1"
+            fi
+          else
+            SLUG=$(echo "$BRANCH" | tr '/' '-' | tr -cd 'a-zA-Z0-9._-' | cut -c1-40)
+            VERSION="${INPUT_VERSION:-${SLUG}-$(git rev-parse --short HEAD)}"
+          fi
+          echo "current=$CURRENT"  >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION"  >> "$GITHUB_OUTPUT"
+          echo "Versão resolvida: $VERSION (metadata atual: $CURRENT)"
+
+      - name: Recusar tag já publicada
+        if: ${{ inputs.push_image }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Sobrescrever uma tag publicada impede rollback e deixa o Airbyte
+          # servindo camada em cache. Tag nova a cada build.
+          if docker manifest inspect "$REGISTRY_REPO:$VERSION" >/dev/null 2>&1; then
+            echo "::error::$REGISTRY_REPO:$VERSION já existe no registry. Escolha outra versão."
+            exit 1
+          fi
+
+      - name: Bump de versão e changelog (somente release)
+        if: ${{ inputs.release }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          CURRENT: ${{ steps.version.outputs.current }}
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          set -euo pipefail
+          sed -i "s|dockerImageTag: $CURRENT|dockerImageTag: $VERSION|" "$CONNECTOR_DIR/metadata.yaml"
+          grep -q "dockerImageTag: $VERSION" "$CONNECTOR_DIR/metadata.yaml" \
+            || { echo "::error::bump do metadata.yaml falhou"; exit 1; }
+
+          # Insere a linha no changelog logo após o separador da tabela.
+          DOC="docs/integrations/destinations/postgres.md"
+          if grep -qE '^\|:-{2,}' "$DOC"; then
+            ROW="| $VERSION | $(date +%Y-%m-%d) | Crewhu fork (not upstream) | Automated release from branch $BRANCH. |"
+            awk -v row="$ROW" '{print} /^\|:-{2,}/ && !done {print row; done=1}' "$DOC" > "$DOC.tmp"
+            mv "$DOC.tmp" "$DOC"
+          else
+            echo "::warning::tabela de changelog não encontrada em $DOC; entrada não adicionada"
+          fi
+
+          # Commit local apenas. O push só acontece depois que a imagem
+          # buildar, testar e publicar com sucesso — se o build falhar, o
+          # branch não fica com um release fantasma.
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$CONNECTOR_DIR/metadata.yaml" "$DOC"
+          git commit -m "$BRANCH: Release $VERSION"
+
+      - name: Login no Docker Hub
+        if: ${{ inputs.push_image }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Cache do Gradle
+        uses: actions/cache@v4
+        with:
+          path: ~/gradle-connector-cache
+          key: gradle-connector-${{ hashFiles('**/gradle-wrapper.properties', 'deps.toml') }}
+          restore-keys: gradle-connector-
+
+      - name: Preparar volume de cache do builder
+        run: |
+          # O build-and-push.sh usa um named volume para o cache do Gradle.
+          # Criá-lo como bind mount de um diretório do runner permite que o
+          # actions/cache persista o conteúdo entre execuções.
+          mkdir -p "$HOME/gradle-connector-cache"
+          docker volume create --driver local \
+            --opt type=none --opt o=bind \
+            --opt device="$HOME/gradle-connector-cache" \
+            airbyte-connector-gradle-cache
+
+      - name: Build (e push) da imagem
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PUSH: ${{ inputs.push_image }}
+          TESTS: ${{ inputs.run_tests }}
+        run: |
+          set -euo pipefail
+          ARGS=(--tag "$VERSION" --repo "$REGISTRY_REPO")
+          [[ "$PUSH"  == "true" ]] && ARGS+=(--push)
+          [[ "$TESTS" != "true" ]] && ARGS+=(--skip-tests)
+          "./$CONNECTOR_DIR/build-and-push.sh" "${ARGS[@]}"
+
+      - name: Publicar commit de release, tag git e GitHub Release
+        if: ${{ inputs.release }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BRANCH: ${{ inputs.branch }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git push origin "HEAD:refs/heads/$BRANCH"
+
+          TAG="destination-postgres-$VERSION"
+          git tag -a "$TAG" -m "destination-postgres $VERSION"
+          git push origin "$TAG"
+
+          DIGEST=$(docker buildx imagetools inspect "$REGISTRY_REPO:$VERSION" \
+                     --format '{{.Manifest.Digest}}' 2>/dev/null || echo "indisponível")
+          gh release create "$TAG" \
+            --target "$(git rev-parse HEAD)" \
+            --title "destination-postgres $VERSION" \
+            --notes "**Imagem:** \`$REGISTRY_REPO:$VERSION\`
+          **Digest:** \`$DIGEST\`
+          **Branch:** \`$BRANCH\`
+          **Commit:** $(git rev-parse HEAD)
+
+          Para usar no Airbyte, aponte o destination para \`$REGISTRY_REPO:$VERSION\`."
+
+      - name: Resumo
+        if: always()
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PUSH: ${{ inputs.push_image }}
+          RELEASE: ${{ inputs.release }}
+        run: |
+          {
+            echo "## destination-postgres — build"
+            echo ""
+            echo "| Campo | Valor |"
+            echo "|---|---|"
+            echo "| Imagem | \`$REGISTRY_REPO:${VERSION:-n/a}\` |"
+            echo "| Publicada | $PUSH |"
+            echo "| Release | $RELEASE |"
+          } >> "$GITHUB_STEP_SUMMARY"
