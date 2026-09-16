@@ -208,6 +208,29 @@ jobs:
 
           Para usar no Airbyte, aponte o destination para \`$REGISTRY_REPO:$VERSION\`."
 
+      - name: Limpar artefatos Docker do runner
+        if: always()
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Runners hospedados pelo GitHub são efêmeros, mas este workflow não
+          # pode depender disso: num runner self-hosted compartilhado, cada
+          # execução deixaria ~1.5GB (imagens + volume + build cache) até
+          # encher o disco. O job remove exatamente o que criou — nada de
+          # docker system prune global, que afetaria outros jobs no mesmo host.
+          docker rmi -f "destination-postgres-local:${VERSION:-none}"  2>/dev/null || true
+          docker rmi -f "$REGISTRY_REPO:${VERSION:-none}"              2>/dev/null || true
+          docker rmi -f airbyte-connector-builder:jdk21                2>/dev/null || true
+          # Remove só o handle do volume; o diretório bind-montado fica para o
+          # actions/cache persistir no post-job.
+          docker volume rm airbyte-connector-gradle-cache              2>/dev/null || true
+          # Camadas órfãs desta execução + build cache com mais de 24h (em
+          # runner efêmero é no-op; em self-hosted impede acúmulo gradual).
+          docker image prune -f                          >/dev/null 2>&1 || true
+          docker builder prune -f --filter "until=24h"   >/dev/null 2>&1 || true
+          echo "Uso de disco do Docker após a limpeza:"
+          docker system df || true
+
       - name: Resumo
         if: always()
         env:
