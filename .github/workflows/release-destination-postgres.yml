@@ -27,8 +27,8 @@
 #   2. Instalar o app na org, restrito ao repositório crewhu/airbyte
 #   3. Gerar uma private key (.pem) na página do app
 #   4. Neste repo (Settings → Secrets and variables → Actions):
-#        variable RELEASE_APP_ID          = App ID numérico
-#        secret   RELEASE_APP_PRIVATE_KEY = conteúdo do .pem
+#        secret RELEASE_APP_ID          = App ID numérico
+#        secret RELEASE_APP_PRIVATE_KEY = conteúdo do .pem
 #   SLACK_WEBHOOK_URL   (opcional) Incoming Webhook do canal que recebe o
 #                       status da execução; sem ele a notificação é pulada
 
@@ -81,7 +81,7 @@ jobs:
           RELEASE: ${{ inputs.release }}
           PUSH: ${{ inputs.push_image }}
           TESTS: ${{ inputs.run_tests }}
-          APP_ID: ${{ vars.RELEASE_APP_ID }}
+          APP_ID: ${{ secrets.RELEASE_APP_ID }}
           APP_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
         run: |
           # Uma release sem publicar ou sem testar não é uma release.
@@ -96,7 +96,7 @@ jobs:
           # no registry, sem tag nem GitHub Release) — runs 35138983055 e
           # 35143532374.
           if [[ "$RELEASE" == "true" && ( -z "$APP_ID" || -z "$APP_KEY" ) ]]; then
-            echo "::error::release=true exige o GitHub App da org configurado (variable RELEASE_APP_ID + secret RELEASE_APP_PRIVATE_KEY — instruções no cabeçalho deste workflow); o GITHUB_TOKEN não consegue criar a tag/release neste repo"; exit 1
+            echo "::error::release=true exige o GitHub App da org configurado (secrets RELEASE_APP_ID + RELEASE_APP_PRIVATE_KEY — instruções no cabeçalho deste workflow); o GITHUB_TOKEN não consegue criar a tag/release neste repo"; exit 1
           fi
 
       - name: Checkout do branch selecionado
@@ -217,7 +217,7 @@ jobs:
         id: app_token
         uses: actions/create-github-app-token@v2
         with:
-          app-id: ${{ vars.RELEASE_APP_ID }}
+          app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
       - name: Publicar commit de release, tag git e GitHub Release
