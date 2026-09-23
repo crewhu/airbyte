@@ -16,8 +16,14 @@ import io.airbyte.protocol.models.v0.DestinationSyncMode
 import io.github.oshai.kotlinlogging.KotlinLogging
 import jakarta.inject.Singleton
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 private val log = KotlinLogging.logger {}
+
+// Diagnostics only: which env vars get dumped on startup while we determine what
+// stable identifier the platform actually injects into the destination container.
+private val CANDIDATE_ENV_KEY_REGEX =
+    Regex("CONNECTION|WORKSPACE|JOB|ATTEMPT|SYNC|DESTINATION|SOURCE|AIRBYTE", RegexOption.IGNORE_CASE)
 
 @Singleton
 class DestinationStreamFactory(
@@ -30,6 +36,29 @@ class DestinationStreamFactory(
     // identifier (CONNECTION_ID env var or non-zero syncId) is available.
     private val workerFallbackUniqueId: String by lazy {
         UUID.randomUUID().toString().take(8)
+    }
+
+    // Diagnostics only: the identity inventory is dumped once per process, not once
+    // per stream, so a multi-stream sync does not repeat it.
+    private val identityInventoryLogged = AtomicBoolean(false)
+
+    private fun logIdentityInventoryOnce(syncId: Long) {
+        if (!identityInventoryLogged.compareAndSet(false, true)) {
+            return
+        }
+        val env = System.getenv()
+        val identityKeys =
+            env.keys
+                .filter { CANDIDATE_ENV_KEY_REGEX.containsMatchIn(it) }
+                .sorted()
+                .joinToString(", ") { "$it=${env[it]}" }
+                .ifEmpty { "(none)" }
+        log.info {
+            "crewhu fork | temp-table-identity | CONNECTION_ID=${env["CONNECTION_ID"] ?: "<absent>"} " +
+                "AIRBYTE_CONNECTION_ID=${env["AIRBYTE_CONNECTION_ID"] ?: "<absent>"} " +
+                "syncId=$syncId"
+        }
+        log.info { "crewhu fork | temp-table-identity | candidate env vars: $identityKeys" }
     }
 
     fun make(stream: ConfiguredAirbyteStream, resolvedTableName: TableName): DestinationStream {
@@ -52,6 +81,15 @@ class DestinationStreamFactory(
                 DestinationSyncMode.SOFT_DELETE -> SoftDelete
             }
         val syncId = stream.syncId ?: 0L
+        logIdentityInventoryOnce(syncId)
+        val uniqueIdSource =
+            when {
+                System.getenv("CONNECTION_ID") != null -> "CONNECTION_ID env (deterministic)"
+                System.getenv("AIRBYTE_CONNECTION_ID") != null ->
+                    "AIRBYTE_CONNECTION_ID env (deterministic)"
+                syncId != 0L -> "syncId (changes every sync)"
+                else -> "workerFallbackUniqueId (RANDOM - orphan temp tables are unreclaimable)"
+            }
         val tempTableUniqueId =
             System.getenv("CONNECTION_ID")
                 ?: System.getenv("AIRBYTE_CONNECTION_ID")
@@ -64,6 +102,12 @@ class DestinationStreamFactory(
                 importType,
                 uniqueId = tempTableUniqueId,
             )
+        log.info {
+            "crewhu fork | temp-table-identity | stream=${stream.stream.namespace}.${stream.stream.name} " +
+                "finalTable=${resolvedTableName.toPrettyString()} " +
+                "tempTable=${tableSchema.tableNames.tempTableName?.toPrettyString()} " +
+                "uniqueId=$tempTableUniqueId source=$uniqueIdSource"
+        }
 
         return DestinationStream(
             unmappedNamespace = stream.stream.namespace,
