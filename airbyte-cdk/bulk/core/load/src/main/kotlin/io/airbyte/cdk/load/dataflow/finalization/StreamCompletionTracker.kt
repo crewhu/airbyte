@@ -33,6 +33,33 @@ class StreamCompletionTracker(
         }
     }
 
+    /**
+     * Marks every catalog stream complete because the input ended and the pipeline finished without
+     * error.
+     *
+     * The platform (container-orchestrator 1.8.1) does not forward STREAM_STATUS traces to this
+     * destination's stdin: a run logs no incoming trace at all, so accept() never fires and the
+     * tracker stays empty no matter how cleanly the sync ran. That made allStreamsComplete() answer
+     * false on a fully successful sync, which discarded every temp table without upserting and lost
+     * the whole batch while the job still reported "completed".
+     *
+     * Draining the input and completing the pipeline is itself proof that the source sent
+     * everything it had: the source's own exit is what closes the stream. Only the success path
+     * calls this -- a pipeline that throws still finalizes as a failure and still discards.
+     */
+    fun acceptEndOfInput() {
+        if (completedStreams.containsAll(expectedStreams)) {
+            return
+        }
+        val inferred = expectedStreams - completedStreams
+        completedStreams.addAll(expectedStreams)
+        log.info {
+            "crewhu fork | stream-completion | input ended and pipeline succeeded; " +
+                "marking ${inferred.size} stream(s) complete without a trace: " +
+                "${inferred.map { it.toPrettyString() }}"
+        }
+    }
+
     fun allStreamsComplete(): Boolean {
         val complete = completedStreams.containsAll(expectedStreams)
         if (!complete) {
