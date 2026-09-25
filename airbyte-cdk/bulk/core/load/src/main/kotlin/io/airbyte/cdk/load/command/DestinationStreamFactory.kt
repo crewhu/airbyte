@@ -56,6 +56,7 @@ class DestinationStreamFactory(
         log.info {
             "crewhu fork | temp-table-identity | CONNECTION_ID=${env["CONNECTION_ID"] ?: "<absent>"} " +
                 "AIRBYTE_CONNECTION_ID=${env["AIRBYTE_CONNECTION_ID"] ?: "<absent>"} " +
+                "WORKER_JOB_ID=${env["WORKER_JOB_ID"] ?: "<absent>"} " +
                 "syncId=$syncId"
         }
         log.info { "crewhu fork | temp-table-identity | candidate env vars: $identityKeys" }
@@ -87,12 +88,15 @@ class DestinationStreamFactory(
                 System.getenv("CONNECTION_ID") != null -> "CONNECTION_ID env (deterministic)"
                 System.getenv("AIRBYTE_CONNECTION_ID") != null ->
                     "AIRBYTE_CONNECTION_ID env (deterministic)"
+                !System.getenv("WORKER_JOB_ID").isNullOrBlank() ->
+                    "WORKER_JOB_ID env (stable across attempts, changes every job)"
                 syncId != 0L -> "syncId (changes every sync)"
                 else -> "workerFallbackUniqueId (RANDOM - orphan temp tables are unreclaimable)"
             }
         val tempTableUniqueId =
             System.getenv("CONNECTION_ID")
                 ?: System.getenv("AIRBYTE_CONNECTION_ID")
+                ?: System.getenv("WORKER_JOB_ID")?.takeIf { it.isNotBlank() }
                 ?: syncId.takeIf { it != 0L }?.toString()
                 ?: workerFallbackUniqueId
         val tableSchema =
