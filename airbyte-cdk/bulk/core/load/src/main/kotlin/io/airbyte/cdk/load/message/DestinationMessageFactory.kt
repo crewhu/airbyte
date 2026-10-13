@@ -15,9 +15,12 @@ import io.airbyte.cdk.load.util.Jsons
 import io.airbyte.cdk.load.util.UUIDGenerator
 import io.airbyte.protocol.models.v0.*
 import io.airbyte.protocol.protobuf.AirbyteMessage.AirbyteMessageProtobuf
+import io.github.oshai.kotlinlogging.KotlinLogging
 import io.micronaut.context.annotation.Value
 import jakarta.inject.Named
 import jakarta.inject.Singleton
+
+private val log = KotlinLogging.logger {}
 
 @Singleton
 class DestinationMessageFactory(
@@ -107,6 +110,15 @@ class DestinationMessageFactory(
             }
             AirbyteMessage.Type.TRACE -> {
                 val status = message.trace.streamStatus
+                // Diagnostics: stream-complete messages are not reaching the completion tracker,
+                // which makes the destination discard every temp table without upserting. Log what
+                // actually arrives before any lookup can throw.
+                log.info {
+                    "crewhu fork | trace-in | traceType=${message.trace.type} " +
+                        "status=${status?.status} " +
+                        "rawNamespace=${status?.streamDescriptor?.namespace} " +
+                        "rawName=${status?.streamDescriptor?.name}"
+                }
                 if (
                     message.trace.type == null ||
                         message.trace.type == AirbyteTraceMessage.Type.STREAM_STATUS
@@ -116,7 +128,16 @@ class DestinationMessageFactory(
                             namespace = status.streamDescriptor.namespace,
                             name = status.streamDescriptor.name,
                         )
-                    val stream = catalog.getStream(descriptor)
+                    val stream =
+                        try {
+                            catalog.getStream(descriptor)
+                        } catch (e: IllegalArgumentException) {
+                            log.warn {
+                                "crewhu fork | trace-in | lookup FAILED for ${descriptor.toPrettyString()} -- " +
+                                    "catalog has ${catalog.streams.map { it.mappedDescriptor.toPrettyString() }}"
+                            }
+                            throw e
+                        }
                     when (status.status) {
                         AirbyteStreamStatusTraceMessage.AirbyteStreamStatus.COMPLETE ->
                             if (fileTransferEnabled) {

@@ -59,6 +59,12 @@ class DestinationLifecycle(
             throw e
         }
 
+        // The pipeline drained the input and returned without throwing, so every stream the source
+        // sent arrived in full. Treat that as completion: the platform does not deliver
+        // STREAM_STATUS traces here, and without this the tracker stays empty and the finalization
+        // below discards every temp table instead of upserting it.
+        completionTracker.acceptEndOfInput()
+
         finalizeIndividualStreams(streamLoaders)
 
         teardownDestination()
