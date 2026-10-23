@@ -545,6 +545,13 @@ class PostgresDirectLoadSqlGenerator(
         return "SELECT COUNT(*) AS \"$COUNT_TOTAL_ALIAS\" FROM ${getFullyQualifiedName(tableName)};"
     }
 
+    /**
+     * Probes for the presence of at least one row. Postgres stops at the first match, so the cost
+     * is bounded regardless of table size -- unlike [countTable], which scans every row.
+     */
+    fun tableIsNonEmpty(tableName: TableName): String =
+        "SELECT 1 FROM ${getFullyQualifiedName(tableName)} LIMIT 1;"
+
     fun createNamespace(namespace: String): String {
         return "CREATE SCHEMA IF NOT EXISTS \"$namespace\";"
     }

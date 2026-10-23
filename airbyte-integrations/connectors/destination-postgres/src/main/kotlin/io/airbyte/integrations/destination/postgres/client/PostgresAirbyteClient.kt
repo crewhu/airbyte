@@ -62,6 +62,16 @@ class PostgresAirbyteClient(
             null
         }
 
+    override suspend fun tableIsEmpty(tableName: TableName): Boolean? =
+        try {
+            executeQuery(sqlGenerator.tableIsNonEmpty(tableName)) { resultSet -> !resultSet.next() }
+        } catch (e: Exception) {
+            log.debug(e) {
+                "Table ${tableName.namespace}.${tableName.name} does not exist. Returning a null to signal a missing table."
+            }
+            null
+        }
+
     override suspend fun namespaceExists(namespace: String): Boolean {
         return executeQuery(
             """

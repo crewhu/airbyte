@@ -41,6 +41,16 @@ interface TableOperationsClient {
     /** Returns the row count of a table, or null if the table doesn't exist. */
     suspend fun countTable(tableName: TableName): Long? = null
 
+    /**
+     * Returns whether the table is empty, or null if the table doesn't exist.
+     *
+     * Callers only need three states (missing / empty / non-empty), so implementations should
+     * prefer a bounded existence probe over a full row count. The default derives the answer from
+     * [countTable] so that destinations which have not overridden it keep their current behavior.
+     */
+    suspend fun tableIsEmpty(tableName: TableName): Boolean? =
+        countTable(tableName)?.let { it == 0L }
+
     /** Returns generation ID from an arbitrary record in the table (0 if null). */
     suspend fun getGenerationId(tableName: TableName): Long = 0
 

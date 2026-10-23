@@ -54,14 +54,14 @@ abstract class BaseDirectLoadInitialStatusGatherer(
     }
 
     private suspend fun getTableStatus(tableName: TableName): DirectLoadTableStatus? {
-        val numberOfRecords: Long? = tableOperationsClient.countTable(tableName)
-        return when (numberOfRecords) {
+        // Only the empty/non-empty distinction is kept, so this asks for exactly that rather than
+        // paying for a full COUNT(*) whose value is discarded here.
+        val isEmpty: Boolean? = tableOperationsClient.tableIsEmpty(tableName)
+        return when (isEmpty) {
             // Missing table
             null -> null
-            // Empty Table
-            0L -> DirectLoadTableStatus(isEmpty = true)
-            // Non-empty Table
-            else -> DirectLoadTableStatus(isEmpty = false)
+            // Empty or non-empty table
+            else -> DirectLoadTableStatus(isEmpty = isEmpty)
         }
     }
 
