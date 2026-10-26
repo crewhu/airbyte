@@ -400,6 +400,13 @@ internal class PostgresDirectLoadSqlGeneratorTest {
     }
 
     @Test
+    fun testTableIsNonEmpty() {
+        val tableName = TableName(namespace = "namespace", name = "name")
+        val sql = postgresDirectLoadSqlGenerator.tableIsNonEmpty(tableName)
+        assertEquals("SELECT 1 FROM \"namespace\".\"name\" LIMIT 1;", sql)
+    }
+
+    @Test
     fun testCreateNamespace() {
         val namespace = "namespace"
         val sql = postgresDirectLoadSqlGenerator.createNamespace(namespace)
