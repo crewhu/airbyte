@@ -652,7 +652,7 @@ internal class PostgresAirbyteClientTest {
         every { dataSource.connection } returns connection
         every { sqlGenerator.getTableSchema(tableName) } returns MOCK_SQL_QUERY
         every { sqlGenerator.getPrimaryKeyIndexColumns(tableName) } returns MOCK_SQL_QUERY
-        every { sqlGenerator.getCursorIndexColumn(tableName) } returns MOCK_SQL_QUERY
+        every { sqlGenerator.getCursorIndexColumn(tableName, any()) } returns MOCK_SQL_QUERY
         every {
             sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any(), any(), any())
         } returns MOCK_SQL_QUERY
@@ -725,7 +725,7 @@ internal class PostgresAirbyteClientTest {
         every { dataSource.connection } returns connection
         every { sqlGenerator.getTableSchema(tableName) } returns MOCK_SQL_QUERY
         every { sqlGenerator.getPrimaryKeyIndexColumns(tableName) } returns MOCK_SQL_QUERY
-        every { sqlGenerator.getCursorIndexColumn(tableName) } returns MOCK_SQL_QUERY
+        every { sqlGenerator.getCursorIndexColumn(tableName, any()) } returns MOCK_SQL_QUERY
         every {
             sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any(), any(), any())
         } returns MOCK_SQL_QUERY
@@ -797,7 +797,7 @@ internal class PostgresAirbyteClientTest {
         every { dataSource.connection } returns connection
         every { sqlGenerator.getTableSchema(tableName) } returns MOCK_SQL_QUERY
         every { sqlGenerator.getPrimaryKeyIndexColumns(tableName) } returns MOCK_SQL_QUERY
-        every { sqlGenerator.getCursorIndexColumn(tableName) } returns MOCK_SQL_QUERY
+        every { sqlGenerator.getCursorIndexColumn(tableName, any()) } returns MOCK_SQL_QUERY
         every {
             sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any(), any(), any())
         } returns MOCK_SQL_QUERY
@@ -870,7 +870,7 @@ internal class PostgresAirbyteClientTest {
         every { dataSource.connection } returns connection
         every { sqlGenerator.getTableSchema(tableName) } returns MOCK_SQL_QUERY
         every { sqlGenerator.getPrimaryKeyIndexColumns(tableName) } returns MOCK_SQL_QUERY
-        every { sqlGenerator.getCursorIndexColumn(tableName) } returns MOCK_SQL_QUERY
+        every { sqlGenerator.getCursorIndexColumn(tableName, any()) } returns MOCK_SQL_QUERY
         every {
             sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any(), any(), any())
         } returns MOCK_SQL_QUERY

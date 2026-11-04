@@ -270,7 +270,7 @@ internal class PostgresDirectLoadSqlGeneratorTest {
         val expectedIndexesSql =
             """
             CREATE INDEX IF NOT EXISTS "idx_pk_test_table" ON "test_schema"."test_table" ("id");
-            CREATE INDEX IF NOT EXISTS "idx_cursor_test_table" ON "test_schema"."test_table" ("updatedAt");
+            CREATE INDEX IF NOT EXISTS "idx_cursor_test_table_e95021f0" ON "test_schema"."test_table" ("updatedAt");
             CREATE INDEX IF NOT EXISTS "idx_extracted_at_test_table" ON "test_schema"."test_table" ("_airbyte_extracted_at");
             """
 
@@ -1144,7 +1144,7 @@ internal class PostgresDirectLoadSqlGeneratorTest {
         assert(sql.contains("DROP INDEX IF EXISTS \"test_schema\".\"idx_cursor_test_table\""))
         assert(
             sql.contains(
-                "CREATE INDEX IF NOT EXISTS \"idx_cursor_test_table\" ON \"test_schema\".\"test_table\" (\"updated_at\")"
+                "CREATE INDEX IF NOT EXISTS \"idx_cursor_test_table_20f1cce2\" ON \"test_schema\".\"test_table\" (\"updated_at\")"
             )
         )
     }
@@ -1184,7 +1184,7 @@ internal class PostgresDirectLoadSqlGeneratorTest {
         assert(sql.contains("DROP INDEX IF EXISTS \"test_schema\".\"idx_cursor_test_table\""))
         assert(
             sql.contains(
-                "CREATE INDEX IF NOT EXISTS \"idx_cursor_test_table\" ON \"test_schema\".\"test_table\" (\"updated_at\")"
+                "CREATE INDEX IF NOT EXISTS \"idx_cursor_test_table_20f1cce2\" ON \"test_schema\".\"test_table\" (\"updated_at\")"
             )
         )
     }
@@ -1307,8 +1307,95 @@ internal class PostgresDirectLoadSqlGeneratorTest {
         )
         assert(
             sql.contains(
-                "CREATE INDEX IF NOT EXISTS \"idx_cursor_test_table\" ON \"test_schema\".\"test_table\" (\"updated_at\")"
+                "CREATE INDEX IF NOT EXISTS \"idx_cursor_test_table_20f1cce2\" ON \"test_schema\".\"test_table\" (\"updated_at\")"
             )
         )
+    }
+
+    @Test
+    fun testCursorIndexNameIsScopedToCursorColumn() {
+        // The production incident: several connections write the same multi-tenant table with
+        // different cursors. Under the shared name they fought over one index, so every sync
+        // dropped the previous tenant's and recreated its own. Distinct names let them coexist.
+        val tableName = TableName(namespace = "airbyte_etl", name = "auto_task_TimeEntries")
+
+        val lastSyncSql =
+            postgresDirectLoadSqlGenerator.matchSchemas(
+                tableName,
+                columnsToAdd = emptySet(),
+                columnsToRemove = emptySet(),
+                columnsToModify = emptySet(),
+                columnsInDb = emptySet(),
+                recreatePrimaryKeyIndex = false,
+                primaryKeyColumnNames = emptyList(),
+                recreateCursorIndex = true,
+                cursorColumnName = "lastSync"
+            )
+        val lastModifiedSql =
+            postgresDirectLoadSqlGenerator.matchSchemas(
+                tableName,
+                columnsToAdd = emptySet(),
+                columnsToRemove = emptySet(),
+                columnsToModify = emptySet(),
+                columnsInDb = emptySet(),
+                recreatePrimaryKeyIndex = false,
+                primaryKeyColumnNames = emptyList(),
+                recreateCursorIndex = true,
+                cursorColumnName = "lastModifiedDateTime"
+            )
+
+        assert(lastSyncSql.contains("idx_cursor_auto_task_TimeEntries_0ae8e34c"))
+        assert(lastModifiedSql.contains("idx_cursor_auto_task_TimeEntries_c328d9b1"))
+        // Neither sync may touch the other cursor's index.
+        assert(!lastSyncSql.contains("idx_cursor_auto_task_TimeEntries_c328d9b1"))
+        assert(!lastModifiedSql.contains("idx_cursor_auto_task_TimeEntries_0ae8e34c"))
+    }
+
+    @Test
+    fun testCursorIndexDropTargetsOnlyTheLegacySharedIndex() {
+        val tableName = TableName(namespace = "test_schema", name = "test_table")
+
+        val sql =
+            postgresDirectLoadSqlGenerator.matchSchemas(
+                tableName,
+                columnsToAdd = emptySet(),
+                columnsToRemove = emptySet(),
+                columnsToModify = emptySet(),
+                columnsInDb = emptySet(),
+                recreatePrimaryKeyIndex = false,
+                primaryKeyColumnNames = emptyList(),
+                recreateCursorIndex = true,
+                cursorColumnName = "updated_at"
+            )
+
+        // Exactly one DROP, and it names the legacy index -- never the per-column one.
+        assert(sql.contains("DROP INDEX IF EXISTS \"test_schema\".\"idx_cursor_test_table\""))
+        assert(
+            !sql.contains("DROP INDEX IF EXISTS \"test_schema\".\"idx_cursor_test_table_20f1cce2\"")
+        )
+    }
+
+    @Test
+    fun testMatchSchemasBoundsLockWait() {
+        // A blocked ACCESS EXCLUSIVE request queues every later statement on the table, reads
+        // included. The DDL must give up rather than stall the table.
+        val tableName = TableName(namespace = "test_schema", name = "test_table")
+
+        val sql =
+            postgresDirectLoadSqlGenerator.matchSchemas(
+                tableName,
+                columnsToAdd = setOf(Column("new_col", "bigint")),
+                columnsToRemove = emptySet(),
+                columnsToModify = emptySet(),
+                columnsInDb = emptySet(),
+                recreatePrimaryKeyIndex = false,
+                primaryKeyColumnNames = emptyList(),
+                recreateCursorIndex = false,
+                cursorColumnName = null
+            )
+
+        assert(sql.contains("SET LOCAL lock_timeout = '5s';"))
+        // SET LOCAL only holds inside a transaction.
+        assert(sql.indexOf("BEGIN TRANSACTION;") < sql.indexOf("SET LOCAL lock_timeout"))
     }
 }

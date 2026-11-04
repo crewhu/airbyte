@@ -356,8 +356,9 @@ class PostgresAirbyteClient(
     private fun getPrimaryKeyIndexColumns(tableName: TableName): List<String> =
         getIndexColumns(sqlGenerator.getPrimaryKeyIndexColumns(tableName))
 
-    private fun getCursorIndexColumn(tableName: TableName): String? =
-        getIndexColumns(sqlGenerator.getCursorIndexColumn(tableName)).firstOrNull()
+    private fun getCursorIndexColumn(tableName: TableName, cursorColumnName: String): String? =
+        getIndexColumns(sqlGenerator.getCursorIndexColumn(tableName, cursorColumnName))
+            .firstOrNull()
 
     private fun getIndexColumns(sql: String): List<String> =
         executeQuery(sql) { resultSet ->
@@ -369,9 +370,12 @@ class PostgresAirbyteClient(
         }
 
     /**
-     * Checks if the cursor index matches the current stream configuration. If the cursor has
-     * changed (detected by comparing columns in the index), then this will return true, otherwise
-     * returns false.
+     * Checks whether this stream's cursor index is missing, so it can be created.
+     *
+     * The index is looked up by a name that carries the cursor column, so this asks only about
+     * this stream's own index: a sibling connection writing the same table with a different cursor
+     * owns a separate index and is never disturbed. Once the index exists this returns false and
+     * the sync emits no DDL at all.
      *
      * This function will also return false if the stream doesn't have a cursor
      */
@@ -383,15 +387,13 @@ class PostgresAirbyteClient(
         val streamCursor =
             postgresColumnUtils.getCursorColumnName(stream, columnNameMapping) ?: return false
 
-        val existingCursorIndexColumn = getCursorIndexColumn(tableName)
+        val existingCursorIndexColumn = getCursorIndexColumn(tableName, streamCursor)
 
-        return (existingCursorIndexColumn != streamCursor).also { shouldRecreate ->
-            if (shouldRecreate) {
-                log.info {
-                    "Cursor column changed from $existingCursorIndexColumn to $streamCursor"
-                }
+        return (existingCursorIndexColumn != streamCursor).also { shouldCreate ->
+            if (shouldCreate) {
+                log.info { "Cursor index for column $streamCursor is missing; creating it" }
             } else {
-                log.info { "Cursor unchanged, no need to (re)create index" }
+                log.info { "Cursor index for column $streamCursor already exists" }
             }
         }
     }

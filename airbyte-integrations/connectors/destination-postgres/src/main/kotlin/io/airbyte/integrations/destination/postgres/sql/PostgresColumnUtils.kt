@@ -201,8 +201,36 @@ class PostgresColumnUtils(private val postgresConfiguration: PostgresConfigurati
         }
     }
 
-    internal fun getCursorIndexName(tableName: TableName): String =
+    /**
+     * Legacy cursor index name, which identifies the index by table alone.
+     *
+     * A table written by several connections holds only one such index, so connections declaring
+     * different cursors fight over it: each sync sees the previous tenant's column, concludes the
+     * cursor changed, and issues DROP INDEX + CREATE INDEX. The DROP takes an ACCESS EXCLUSIVE lock
+     * and queues every other statement on the table behind it -- reads included.
+     *
+     * Retained so [getCursorIndexName] can clean up the shared index exactly once per table.
+     */
+    internal fun getLegacyCursorIndexName(tableName: TableName): String =
         CURSOR_INDEX_PREFIX + tableName.name
+
+    /**
+     * Cursor index name scoped to the cursor column, so tenants with different cursors each get
+     * their own index on the same table instead of contending for one shared name.
+     *
+     * Postgres truncates identifiers at 63 bytes. Appending the column could push a long table name
+     * past that and make two cursors collide again on the truncated name, so the column is folded
+     * into a short hash suffix whose length is fixed.
+     */
+    internal fun getCursorIndexName(tableName: TableName, cursorColumnName: String): String =
+        CURSOR_INDEX_PREFIX + tableName.name + "_" + shortHash(cursorColumnName)
+
+    /** 8 hex chars of SHA-256 -- enough to separate the handful of cursors a table ever sees. */
+    private fun shortHash(value: String): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray())
+            .take(4)
+            .joinToString("") { "%02x".format(it) }
 
     internal fun getPrimaryKeyIndexName(tableName: TableName): String =
         PRIMARY_KEY_INDEX_PREFIX + tableName.name
