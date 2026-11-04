@@ -917,8 +917,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 columnsInDb,
                 recreatePrimaryKeyIndex = false,
                 primaryKeyColumnNames = emptyList(),
-                recreateCursorIndex = false,
-                cursorColumnName = null
             )
 
         assert(sql.contains("BEGIN TRANSACTION;"))
@@ -945,8 +943,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 columnsInDb,
                 recreatePrimaryKeyIndex = false,
                 primaryKeyColumnNames = emptyList(),
-                recreateCursorIndex = false,
-                cursorColumnName = null
             )
 
         assert(sql.contains("BEGIN TRANSACTION;"))
@@ -972,8 +968,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 columnsInDb,
                 recreatePrimaryKeyIndex = false,
                 primaryKeyColumnNames = emptyList(),
-                recreateCursorIndex = false,
-                cursorColumnName = null
             )
 
         assert(sql.contains("ALTER COLUMN \"column_a\" TYPE jsonb"))
@@ -997,8 +991,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 columnsInDb,
                 recreatePrimaryKeyIndex = false,
                 primaryKeyColumnNames = emptyList(),
-                recreateCursorIndex = false,
-                cursorColumnName = null
             )
 
         assert(sql.contains("ALTER COLUMN \"column_b\" TYPE varchar"))
@@ -1022,8 +1014,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 columnsInDb,
                 recreatePrimaryKeyIndex = false,
                 primaryKeyColumnNames = emptyList(),
-                recreateCursorIndex = false,
-                cursorColumnName = null
             )
 
         assert(sql.contains("ALTER COLUMN \"column_c\" TYPE character varying"))
@@ -1047,8 +1037,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 columnsInDb,
                 recreatePrimaryKeyIndex = false,
                 primaryKeyColumnNames = emptyList(),
-                recreateCursorIndex = false,
-                cursorColumnName = null
             )
 
         assert(sql.contains("ALTER COLUMN \"column_d\" TYPE varchar"))
@@ -1072,8 +1060,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 columnsInDb,
                 recreatePrimaryKeyIndex = false,
                 primaryKeyColumnNames = emptyList(),
-                recreateCursorIndex = false,
-                cursorColumnName = null
             )
 
         assert(sql.contains("BEGIN TRANSACTION;"))
@@ -1101,8 +1087,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 columnsInDb,
                 recreatePrimaryKeyIndex = true,
                 primaryKeyColumnNames = primaryKeyColumnNames,
-                recreateCursorIndex = false,
-                cursorColumnName = null
             )
 
         assert(sql.contains("BEGIN TRANSACTION;"))
@@ -1123,7 +1107,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
         val columnsToRemove = emptySet<Column>()
         val columnsToModify = emptySet<Column>()
         val columnsInDb = emptySet<Column>()
-        val cursorColumnName = "updated_at"
 
         val sql =
             postgresDirectLoadSqlGenerator.matchSchemas(
@@ -1134,8 +1117,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 columnsInDb,
                 recreatePrimaryKeyIndex = false,
                 primaryKeyColumnNames = emptyList(),
-                recreateCursorIndex = true,
-                cursorColumnName = cursorColumnName
             )
 
         assert(sql.contains("BEGIN TRANSACTION;"))
@@ -1154,7 +1135,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
         val columnsToModify = setOf(Column("modified_col", "jsonb"))
         val columnsInDb = setOf(Column("modified_col", "varchar"))
         val primaryKeyColumnNames = listOf("id")
-        val cursorColumnName = "updated_at"
 
         val sql =
             postgresDirectLoadSqlGenerator.matchSchemas(
@@ -1165,8 +1145,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 columnsInDb,
                 recreatePrimaryKeyIndex = true,
                 primaryKeyColumnNames = primaryKeyColumnNames,
-                recreateCursorIndex = true,
-                cursorColumnName = cursorColumnName
             )
 
         assert(sql.contains("BEGIN TRANSACTION;"))
@@ -1209,8 +1187,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 columnsInDb,
                 recreatePrimaryKeyIndex = false,
                 primaryKeyColumnNames = emptyList(),
-                recreateCursorIndex = false,
-                cursorColumnName = null
             )
 
         assert(sql.contains("BEGIN TRANSACTION;"))
@@ -1244,8 +1220,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 columnsInDb,
                 recreatePrimaryKeyIndex = false,
                 primaryKeyColumnNames = emptyList(),
-                recreateCursorIndex = false,
-                cursorColumnName = null
             )
 
         assert(sql.contains("BEGIN TRANSACTION;"))
@@ -1273,7 +1247,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
         val columnsToModify = emptySet<Column>()
         val columnsInDb = emptySet<Column>()
         val primaryKeyColumnNames = listOf("id")
-        val cursorColumnName = "updated_at"
 
         val sql =
             cascadeSqlGenerator.matchSchemas(
@@ -1284,8 +1257,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 columnsInDb,
                 recreatePrimaryKeyIndex = true,
                 primaryKeyColumnNames = primaryKeyColumnNames,
-                recreateCursorIndex = true,
-                cursorColumnName = cursorColumnName
             )
 
         // Verify DROP INDEX statements include CASCADE
@@ -1355,8 +1326,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 columnsInDb = emptySet(),
                 recreatePrimaryKeyIndex = false,
                 primaryKeyColumnNames = emptyList(),
-                recreateCursorIndex = false,
-                cursorColumnName = null
             )
         assert(!schemaSql.contains("idx_cursor"))
     }
@@ -1377,8 +1346,6 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 columnsInDb = emptySet(),
                 recreatePrimaryKeyIndex = false,
                 primaryKeyColumnNames = emptyList(),
-                recreateCursorIndex = false,
-                cursorColumnName = null
             )
 
         assert(sql.contains("SET LOCAL lock_timeout = '5s';"))

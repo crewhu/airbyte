@@ -218,8 +218,6 @@ class PostgresAirbyteClient(
                         shouldRecreatePrimaryKeyIndex(stream, tableName, columnNameMapping),
                 primaryKeyColumnNames =
                     postgresColumnUtils.getPrimaryKeysColumnNames(stream, columnNameMapping),
-                recreateCursorIndex = false,
-                cursorColumnName = null,
             )
         )
 
@@ -333,8 +331,6 @@ class PostgresAirbyteClient(
                     columnsInDb = columnsInDb,
                     recreatePrimaryKeyIndex = false,
                     primaryKeyColumnNames = emptyList(),
-                    recreateCursorIndex = false,
-                    cursorColumnName = null,
                 )
             )
         }

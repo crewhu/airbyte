@@ -112,7 +112,8 @@ class PostgresDirectLoadSqlGenerator(
             if (postgresConfiguration.legacyRawTablesOnly) {
                 ""
             } else {
-                val cursorColumnName = getCursorColumnName(stream, columnNameMapping)
+                val cursorColumnName =
+                    postgresColumnUtils.getCursorColumnName(stream, columnNameMapping)
                 createCursorIndexStatement(cursorColumnName, tableName)
             }
         val extractedAtIndexStatement =
@@ -151,14 +152,6 @@ class PostgresDirectLoadSqlGenerator(
         columnNameMapping: ColumnNameMapping
     ) =
         postgresColumnUtils.getPrimaryKeysColumnNames(importType, columnNameMapping).map {
-            quoteIdentifier(it)
-        }
-
-    private fun getCursorColumnName(
-        stream: DestinationStream,
-        columnNameMapping: ColumnNameMapping
-    ) =
-        postgresColumnUtils.getCursorColumnName(stream, columnNameMapping)?.let {
             quoteIdentifier(it)
         }
 
@@ -643,9 +636,7 @@ class PostgresDirectLoadSqlGenerator(
         columnsToModify: Set<Column>,
         columnsInDb: Set<Column>,
         recreatePrimaryKeyIndex: Boolean,
-        primaryKeyColumnNames: List<String>,
-        recreateCursorIndex: Boolean,
-        cursorColumnName: String?
+        primaryKeyColumnNames: List<String>
     ): String {
         val clauses = mutableSetOf<String>()
         val fullyQualifiedTableName = getFullyQualifiedName(tableName)
