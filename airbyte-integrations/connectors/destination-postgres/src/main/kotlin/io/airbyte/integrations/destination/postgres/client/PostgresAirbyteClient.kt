@@ -218,13 +218,46 @@ class PostgresAirbyteClient(
                         shouldRecreatePrimaryKeyIndex(stream, tableName, columnNameMapping),
                 primaryKeyColumnNames =
                     postgresColumnUtils.getPrimaryKeysColumnNames(stream, columnNameMapping),
-                recreateCursorIndex =
-                    !isRawTablesMode &&
-                        shouldRecreateCursorIndex(stream, tableName, columnNameMapping),
-                cursorColumnName =
-                    postgresColumnUtils.getCursorColumnName(stream, columnNameMapping),
             )
         )
+
+        // Outside the transaction above: CONCURRENTLY cannot run inside one, and that is the whole
+        // point -- this table is shared by several connections, so the index must be built without
+        // taking ACCESS EXCLUSIVE on it.
+        if (!isRawTablesMode && shouldRecreateCursorIndex(stream, tableName, columnNameMapping)) {
+            createCursorIndexConcurrently(stream, tableName, columnNameMapping)
+        }
+    }
+
+    /**
+     * Builds the cursor index without blocking readers or writers.
+     *
+     * A failed CONCURRENTLY build leaves an INVALID index behind, which Postgres ignores when
+     * planning but which also blocks a later rebuild under the same name. Dropping it is itself
+     * ACCESS EXCLUSIVE work on a shared table, so this does not attempt cleanup: it logs and lets
+     * the sync continue. The index is an optimization, never a correctness requirement, and
+     * leaving the repair to an operator keeps an unlucky sync from stalling the table.
+     */
+    private fun createCursorIndexConcurrently(
+        stream: DestinationStream,
+        tableName: TableName,
+        columnNameMapping: ColumnNameMapping,
+    ) {
+        val cursorColumnName =
+            postgresColumnUtils.getCursorColumnName(stream, columnNameMapping) ?: return
+        val sql = sqlGenerator.createCursorIndexConcurrently(cursorColumnName, tableName)
+        if (sql.isEmpty()) {
+            return
+        }
+        try {
+            execute(sql)
+        } catch (e: Exception) {
+            log.warn(e) {
+                "Could not build cursor index on ${tableName.namespace}.${tableName.name} for " +
+                    "column $cursorColumnName. The sync continues without it; a failed " +
+                    "CONCURRENTLY build may leave an INVALID index that has to be dropped by hand."
+            }
+        }
     }
 
     override suspend fun discoverSchema(tableName: TableName): TableSchema {
@@ -298,8 +331,6 @@ class PostgresAirbyteClient(
                     columnsInDb = columnsInDb,
                     recreatePrimaryKeyIndex = false,
                     primaryKeyColumnNames = emptyList(),
-                    recreateCursorIndex = false,
-                    cursorColumnName = null,
                 )
             )
         }
@@ -356,8 +387,9 @@ class PostgresAirbyteClient(
     private fun getPrimaryKeyIndexColumns(tableName: TableName): List<String> =
         getIndexColumns(sqlGenerator.getPrimaryKeyIndexColumns(tableName))
 
-    private fun getCursorIndexColumn(tableName: TableName): String? =
-        getIndexColumns(sqlGenerator.getCursorIndexColumn(tableName)).firstOrNull()
+    private fun getCursorIndexColumn(tableName: TableName, cursorColumnName: String): String? =
+        getIndexColumns(sqlGenerator.getCursorIndexColumn(tableName, cursorColumnName))
+            .firstOrNull()
 
     private fun getIndexColumns(sql: String): List<String> =
         executeQuery(sql) { resultSet ->
@@ -369,9 +401,12 @@ class PostgresAirbyteClient(
         }
 
     /**
-     * Checks if the cursor index matches the current stream configuration. If the cursor has
-     * changed (detected by comparing columns in the index), then this will return true, otherwise
-     * returns false.
+     * Checks whether this stream's cursor index is missing, so it can be created.
+     *
+     * The index is looked up by a name that carries the cursor column, so this asks only about
+     * this stream's own index: a sibling connection writing the same table with a different cursor
+     * owns a separate index and is never disturbed. Once the index exists this returns false and
+     * the sync emits no DDL at all.
      *
      * This function will also return false if the stream doesn't have a cursor
      */
@@ -383,15 +418,13 @@ class PostgresAirbyteClient(
         val streamCursor =
             postgresColumnUtils.getCursorColumnName(stream, columnNameMapping) ?: return false
 
-        val existingCursorIndexColumn = getCursorIndexColumn(tableName)
+        val existingCursorIndexColumn = getCursorIndexColumn(tableName, streamCursor)
 
-        return (existingCursorIndexColumn != streamCursor).also { shouldRecreate ->
-            if (shouldRecreate) {
-                log.info {
-                    "Cursor column changed from $existingCursorIndexColumn to $streamCursor"
-                }
+        return (existingCursorIndexColumn != streamCursor).also { shouldCreate ->
+            if (shouldCreate) {
+                log.info { "Cursor index for column $streamCursor is missing; creating it" }
             } else {
-                log.info { "Cursor unchanged, no need to (re)create index" }
+                log.info { "Cursor index for column $streamCursor already exists" }
             }
         }
     }

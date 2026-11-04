@@ -652,9 +652,9 @@ internal class PostgresAirbyteClientTest {
         every { dataSource.connection } returns connection
         every { sqlGenerator.getTableSchema(tableName) } returns MOCK_SQL_QUERY
         every { sqlGenerator.getPrimaryKeyIndexColumns(tableName) } returns MOCK_SQL_QUERY
-        every { sqlGenerator.getCursorIndexColumn(tableName) } returns MOCK_SQL_QUERY
+        every { sqlGenerator.getCursorIndexColumn(tableName, any()) } returns MOCK_SQL_QUERY
         every {
-            sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any(), any(), any())
+            sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any())
         } returns MOCK_SQL_QUERY
 
         // no column changes
@@ -678,8 +678,6 @@ internal class PostgresAirbyteClientTest {
                     columnsInDb = any(),
                     recreatePrimaryKeyIndex = false,
                     primaryKeyColumnNames = emptyList(),
-                    recreateCursorIndex = false,
-                    cursorColumnName = null
                 )
             }
         }
@@ -725,9 +723,9 @@ internal class PostgresAirbyteClientTest {
         every { dataSource.connection } returns connection
         every { sqlGenerator.getTableSchema(tableName) } returns MOCK_SQL_QUERY
         every { sqlGenerator.getPrimaryKeyIndexColumns(tableName) } returns MOCK_SQL_QUERY
-        every { sqlGenerator.getCursorIndexColumn(tableName) } returns MOCK_SQL_QUERY
+        every { sqlGenerator.getCursorIndexColumn(tableName, any()) } returns MOCK_SQL_QUERY
         every {
-            sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any(), any(), any())
+            sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any())
         } returns MOCK_SQL_QUERY
 
         every { postgresColumnUtils.defaultColumns() } returns emptyList()
@@ -749,8 +747,6 @@ internal class PostgresAirbyteClientTest {
                     columnsInDb = any(),
                     recreatePrimaryKeyIndex = false,
                     primaryKeyColumnNames = emptyList(),
-                    recreateCursorIndex = false,
-                    cursorColumnName = null
                 )
             }
         }
@@ -797,9 +793,9 @@ internal class PostgresAirbyteClientTest {
         every { dataSource.connection } returns connection
         every { sqlGenerator.getTableSchema(tableName) } returns MOCK_SQL_QUERY
         every { sqlGenerator.getPrimaryKeyIndexColumns(tableName) } returns MOCK_SQL_QUERY
-        every { sqlGenerator.getCursorIndexColumn(tableName) } returns MOCK_SQL_QUERY
+        every { sqlGenerator.getCursorIndexColumn(tableName, any()) } returns MOCK_SQL_QUERY
         every {
-            sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any(), any(), any())
+            sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any())
         } returns MOCK_SQL_QUERY
 
         every { postgresColumnUtils.defaultColumns() } returns emptyList()
@@ -822,8 +818,6 @@ internal class PostgresAirbyteClientTest {
                     columnsInDb = any(),
                     recreatePrimaryKeyIndex = true,
                     primaryKeyColumnNames = listOf("new_pk"),
-                    recreateCursorIndex = false,
-                    cursorColumnName = null
                 )
             }
         }
@@ -870,10 +864,11 @@ internal class PostgresAirbyteClientTest {
         every { dataSource.connection } returns connection
         every { sqlGenerator.getTableSchema(tableName) } returns MOCK_SQL_QUERY
         every { sqlGenerator.getPrimaryKeyIndexColumns(tableName) } returns MOCK_SQL_QUERY
-        every { sqlGenerator.getCursorIndexColumn(tableName) } returns MOCK_SQL_QUERY
+        every { sqlGenerator.getCursorIndexColumn(tableName, any()) } returns MOCK_SQL_QUERY
         every {
-            sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any(), any(), any())
+            sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any())
         } returns MOCK_SQL_QUERY
+        every { sqlGenerator.createCursorIndexConcurrently(any(), any()) } returns MOCK_SQL_QUERY
 
         every { postgresColumnUtils.defaultColumns() } returns emptyList()
         every { postgresColumnUtils.getTargetColumns(stream, columnNameMapping) } returns
@@ -896,9 +891,12 @@ internal class PostgresAirbyteClientTest {
                     columnsInDb = any(),
                     recreatePrimaryKeyIndex = false,
                     primaryKeyColumnNames = emptyList(),
-                    recreateCursorIndex = true,
-                    cursorColumnName = "new_cursor"
                 )
+            }
+            // The cursor index is built outside that transaction, CONCURRENTLY, so the shared
+            // table never takes ACCESS EXCLUSIVE from a sync.
+            verify(exactly = 1) {
+                sqlGenerator.createCursorIndexConcurrently("new_cursor", tableName)
             }
         }
     }
@@ -932,7 +930,7 @@ internal class PostgresAirbyteClientTest {
         every { dataSource.connection } returns connection
         every { sqlGenerator.getTableSchema(tableName) } returns MOCK_SQL_QUERY
         every {
-            sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any(), any(), any())
+            sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any())
         } returns MOCK_SQL_QUERY
 
         every { postgresColumnUtils.defaultColumns() } returns emptyList()
@@ -948,8 +946,8 @@ internal class PostgresAirbyteClientTest {
 
         runBlocking {
             client.ensureSchemaMatches(stream, tableName, columnNameMapping)
-            // Verify that recreatePrimaryKeyIndex and recreateCursorIndex are both false
-            // even though primary keys and cursor are defined in the stream
+            // Verify that recreatePrimaryKeyIndex is false even though primary keys are
+            // defined in the stream
             verify(exactly = 1) {
                 sqlGenerator.matchSchemas(
                     tableName = tableName,
@@ -959,8 +957,6 @@ internal class PostgresAirbyteClientTest {
                     columnsInDb = any(),
                     recreatePrimaryKeyIndex = false, // Should be false in raw tables mode
                     primaryKeyColumnNames = listOf("ad_group_id"),
-                    recreateCursorIndex = false, // Should be false in raw tables mode
-                    cursorColumnName = "updated_at"
                 )
             }
         }
@@ -994,7 +990,7 @@ internal class PostgresAirbyteClientTest {
         every { dataSource.connection } returns connection
         every { sqlGenerator.getTableSchema(tableName) } returns MOCK_SQL_QUERY
         every {
-            sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any(), any(), any())
+            sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any())
         } returns MOCK_SQL_QUERY
 
         every { postgresColumnUtils.defaultColumns() } returns emptyList()
@@ -1019,8 +1015,6 @@ internal class PostgresAirbyteClientTest {
                     columnsInDb = any(),
                     recreatePrimaryKeyIndex = false,
                     primaryKeyColumnNames = listOf("new_pk_column"),
-                    recreateCursorIndex = false,
-                    cursorColumnName = null
                 )
             }
         }

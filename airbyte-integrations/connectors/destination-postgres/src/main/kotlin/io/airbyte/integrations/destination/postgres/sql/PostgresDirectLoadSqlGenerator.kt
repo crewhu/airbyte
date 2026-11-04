@@ -30,6 +30,13 @@ class PostgresDirectLoadSqlGenerator(
 
     companion object {
         private const val DEDUPED_TABLE_ALIAS = "deduped_source"
+
+        /**
+         * Ceiling on how long index DDL waits for ACCESS EXCLUSIVE before giving up. Short enough
+         * that a blocked DROP cannot hold the table hostage, long enough to pass under normal
+         * contention.
+         */
+        private const val DDL_LOCK_TIMEOUT = "5s"
         private val EXTRACTED_AT_COLUMN_NAME = quoteIdentifier(COLUMN_NAME_AB_EXTRACTED_AT)
         private val DELETED_AT_COLUMN_NAME = quoteIdentifier(CDC_DELETED_AT_COLUMN)
 
@@ -105,7 +112,8 @@ class PostgresDirectLoadSqlGenerator(
             if (postgresConfiguration.legacyRawTablesOnly) {
                 ""
             } else {
-                val cursorColumnName = getCursorColumnName(stream, columnNameMapping)
+                val cursorColumnName =
+                    postgresColumnUtils.getCursorColumnName(stream, columnNameMapping)
                 createCursorIndexStatement(cursorColumnName, tableName)
             }
         val extractedAtIndexStatement =
@@ -147,14 +155,6 @@ class PostgresDirectLoadSqlGenerator(
             quoteIdentifier(it)
         }
 
-    private fun getCursorColumnName(
-        stream: DestinationStream,
-        columnNameMapping: ColumnNameMapping
-    ) =
-        postgresColumnUtils.getCursorColumnName(stream, columnNameMapping)?.let {
-            quoteIdentifier(it)
-        }
-
     private fun getCursorColumnName(cursor: List<String>, columnNameMapping: ColumnNameMapping) =
         postgresColumnUtils.getCursorColumnName(cursor, columnNameMapping)?.let {
             quoteIdentifier(it)
@@ -191,23 +191,38 @@ class PostgresDirectLoadSqlGenerator(
             ?: ""
     }
 
-    internal fun recreateCursorIndex(cursorColumnName: String?, tableName: TableName): String {
-        val dropCursorIndexStatement =
-            dropIndex(indexName = getCursorIndexName(tableName), schema = getNamespace(tableName))
-        val cursorIndexStatement = createCursorIndexStatement(cursorColumnName, tableName)
-
-        return """
-            $dropCursorIndexStatement
-            $cursorIndexStatement
-        """
-    }
+    /**
+     * Creates this stream's cursor index without blocking the table, or returns "" when there is
+     * nothing to do.
+     *
+     * Two properties keep this off the critical path of a large shared table:
+     *
+     * The index name carries the cursor column, so connections writing the same table with
+     * different cursors own separate indexes instead of fighting over one name. Nothing here ever
+     * drops another cursor's index -- or any index at all. The legacy shared index left by the
+     * previous scheme is removed once by a migration script, never by a sync.
+     *
+     * CONCURRENTLY builds the index without an ACCESS EXCLUSIVE lock, so reads and writes continue
+     * while it is created. That costs a second table scan and forbids running inside a
+     * transaction, which is why this is emitted as a standalone statement rather than folded into
+     * [matchSchemas].
+     */
+    internal fun createCursorIndexConcurrently(
+        cursorColumnName: String?,
+        tableName: TableName
+    ): String =
+        cursorColumnName?.let {
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS ${getCursorIndexName(tableName, it)} " +
+                "ON ${getFullyQualifiedName(tableName)} (${quoteIdentifier(it)});"
+        }
+            ?: ""
 
     private fun createCursorIndexStatement(
         cursorColumnName: String?,
         tableName: TableName
     ): String {
         return cursorColumnName?.let {
-            "CREATE INDEX IF NOT EXISTS ${getCursorIndexName(tableName)} ON ${getFullyQualifiedName(tableName)} ($it);"
+            "CREATE INDEX IF NOT EXISTS ${getCursorIndexName(tableName, it)} ON ${getFullyQualifiedName(tableName)} (${quoteIdentifier(it)});"
         }
             ?: ""
     }
@@ -215,8 +230,8 @@ class PostgresDirectLoadSqlGenerator(
     private fun getPrimaryKeyIndexName(tableName: TableName): String =
         quoteIdentifier(postgresColumnUtils.getPrimaryKeyIndexName(tableName))
 
-    private fun getCursorIndexName(tableName: TableName): String =
-        quoteIdentifier(postgresColumnUtils.getCursorIndexName(tableName))
+    private fun getCursorIndexName(tableName: TableName, cursorColumnName: String): String =
+        quoteIdentifier(postgresColumnUtils.getCursorIndexName(tableName, cursorColumnName))
 
     private fun getExtractedAtIndexName(tableName: TableName): String =
         quoteIdentifier(postgresColumnUtils.getExtractedAtIndexName(tableName))
@@ -586,9 +601,9 @@ class PostgresDirectLoadSqlGenerator(
      * @param tableName The table to query the index for
      * @return SQL query that returns column name in the cursor index
      */
-    fun getCursorIndexColumn(tableName: TableName): String =
+    fun getCursorIndexColumn(tableName: TableName, cursorColumnName: String): String =
         getIndexColumns(
-            indexName = postgresColumnUtils.getCursorIndexName(tableName),
+            indexName = postgresColumnUtils.getCursorIndexName(tableName, cursorColumnName),
             namespace = tableName.namespace
         )
 
@@ -621,9 +636,7 @@ class PostgresDirectLoadSqlGenerator(
         columnsToModify: Set<Column>,
         columnsInDb: Set<Column>,
         recreatePrimaryKeyIndex: Boolean,
-        primaryKeyColumnNames: List<String>,
-        recreateCursorIndex: Boolean,
-        cursorColumnName: String?
+        primaryKeyColumnNames: List<String>
     ): String {
         val clauses = mutableSetOf<String>()
         val fullyQualifiedTableName = getFullyQualifiedName(tableName)
@@ -667,13 +680,17 @@ class PostgresDirectLoadSqlGenerator(
             clauses.add(recreatePrimaryKeyIndex(quotedPrimaryKeyColumnNames, tableName))
         }
 
-        if (recreateCursorIndex) {
-            val quotedCursorColumnName = cursorColumnName?.let { quoteIdentifier(it) }
-            clauses.add(recreateCursorIndex(quotedCursorColumnName, tableName))
-        }
+        // The cursor index is deliberately absent here. It is created CONCURRENTLY as a
+        // standalone statement, because CONCURRENTLY cannot run inside this transaction and a
+        // plain CREATE/DROP would take ACCESS EXCLUSIVE on a table other connections are reading.
 
+        // Bound how long this DDL will wait for its locks. DROP/CREATE INDEX take ACCESS EXCLUSIVE,
+        // and Postgres queues every later statement -- reads included -- behind a waiting lock
+        // request. Failing fast lets the next sync retry instead of stalling the whole table.
+        // SET LOCAL scopes this to the transaction below.
         return """
             BEGIN TRANSACTION;
+            SET LOCAL lock_timeout = '$DDL_LOCK_TIMEOUT';
             ${clauses.joinToString("\n")}
             COMMIT;
         """
