@@ -199,29 +199,30 @@ class PostgresDirectLoadSqlGenerator(
     }
 
     /**
-     * Ensures this stream's cursor index exists, without touching indexes belonging to other
-     * cursors on the same table.
+     * Creates this stream's cursor index without blocking the table, or returns "" when there is
+     * nothing to do.
      *
-     * The index name carries the cursor column, so a multi-tenant table ends up with one index per
-     * distinct cursor and no two syncs contend for the same name. CREATE INDEX IF NOT EXISTS is a
-     * no-op once the index is there, which keeps the steady state free of DDL entirely.
+     * Two properties keep this off the critical path of a large shared table:
      *
-     * The only DROP left targets the legacy shared index. It fires at most once per table: after
-     * the first sync removes it, IF EXISTS makes every later run a no-op.
+     * The index name carries the cursor column, so connections writing the same table with
+     * different cursors own separate indexes instead of fighting over one name. Nothing here ever
+     * drops another cursor's index -- or any index at all. The legacy shared index left by the
+     * previous scheme is removed once by a migration script, never by a sync.
+     *
+     * CONCURRENTLY builds the index without an ACCESS EXCLUSIVE lock, so reads and writes continue
+     * while it is created. That costs a second table scan and forbids running inside a
+     * transaction, which is why this is emitted as a standalone statement rather than folded into
+     * [matchSchemas].
      */
-    internal fun recreateCursorIndex(cursorColumnName: String?, tableName: TableName): String {
-        val dropLegacyCursorIndexStatement =
-            dropIndex(
-                indexName = getLegacyCursorIndexName(tableName),
-                schema = getNamespace(tableName)
-            )
-        val cursorIndexStatement = createCursorIndexStatement(cursorColumnName, tableName)
-
-        return """
-            $dropLegacyCursorIndexStatement
-            $cursorIndexStatement
-        """
-    }
+    internal fun createCursorIndexConcurrently(
+        cursorColumnName: String?,
+        tableName: TableName
+    ): String =
+        cursorColumnName?.let {
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS ${getCursorIndexName(tableName, it)} " +
+                "ON ${getFullyQualifiedName(tableName)} (${quoteIdentifier(it)});"
+        }
+            ?: ""
 
     private fun createCursorIndexStatement(
         cursorColumnName: String?,
@@ -238,9 +239,6 @@ class PostgresDirectLoadSqlGenerator(
 
     private fun getCursorIndexName(tableName: TableName, cursorColumnName: String): String =
         quoteIdentifier(postgresColumnUtils.getCursorIndexName(tableName, cursorColumnName))
-
-    private fun getLegacyCursorIndexName(tableName: TableName): String =
-        quoteIdentifier(postgresColumnUtils.getLegacyCursorIndexName(tableName))
 
     private fun getExtractedAtIndexName(tableName: TableName): String =
         quoteIdentifier(postgresColumnUtils.getExtractedAtIndexName(tableName))
@@ -691,9 +689,9 @@ class PostgresDirectLoadSqlGenerator(
             clauses.add(recreatePrimaryKeyIndex(quotedPrimaryKeyColumnNames, tableName))
         }
 
-        if (recreateCursorIndex) {
-            clauses.add(recreateCursorIndex(cursorColumnName, tableName))
-        }
+        // The cursor index is deliberately absent here. It is created CONCURRENTLY as a
+        // standalone statement, because CONCURRENTLY cannot run inside this transaction and a
+        // plain CREATE/DROP would take ACCESS EXCLUSIVE on a table other connections are reading.
 
         // Bound how long this DDL will wait for its locks. DROP/CREATE INDEX take ACCESS EXCLUSIVE,
         // and Postgres queues every later statement -- reads included -- behind a waiting lock

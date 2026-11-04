@@ -1141,12 +1141,9 @@ internal class PostgresDirectLoadSqlGeneratorTest {
         assert(sql.contains("BEGIN TRANSACTION;"))
         assert(sql.contains("COMMIT;"))
         assert(sql.contains("ADD COLUMN \"new_col\" bigint"))
-        assert(sql.contains("DROP INDEX IF EXISTS \"test_schema\".\"idx_cursor_test_table\""))
-        assert(
-            sql.contains(
-                "CREATE INDEX IF NOT EXISTS \"idx_cursor_test_table_20f1cce2\" ON \"test_schema\".\"test_table\" (\"updated_at\")"
-            )
-        )
+        // matchSchemas no longer emits cursor-index DDL: the index is built CONCURRENTLY as a
+        // standalone statement so a shared table never takes ACCESS EXCLUSIVE from a sync.
+        assert(!sql.contains("idx_cursor"))
     }
 
     @Test
@@ -1181,12 +1178,9 @@ internal class PostgresDirectLoadSqlGeneratorTest {
                 "CREATE INDEX IF NOT EXISTS \"idx_pk_test_table\" ON \"test_schema\".\"test_table\" (\"id\")"
             )
         )
-        assert(sql.contains("DROP INDEX IF EXISTS \"test_schema\".\"idx_cursor_test_table\""))
-        assert(
-            sql.contains(
-                "CREATE INDEX IF NOT EXISTS \"idx_cursor_test_table_20f1cce2\" ON \"test_schema\".\"test_table\" (\"updated_at\")"
-            )
-        )
+        // matchSchemas no longer emits cursor-index DDL: the index is built CONCURRENTLY as a
+        // standalone statement so a shared table never takes ACCESS EXCLUSIVE from a sync.
+        assert(!sql.contains("idx_cursor"))
     }
 
     @Test
@@ -1296,89 +1290,82 @@ internal class PostgresDirectLoadSqlGeneratorTest {
 
         // Verify DROP INDEX statements include CASCADE
         assert(sql.contains("DROP INDEX IF EXISTS \"test_schema\".\"idx_pk_test_table\" CASCADE"))
-        assert(
-            sql.contains("DROP INDEX IF EXISTS \"test_schema\".\"idx_cursor_test_table\" CASCADE")
-        )
+        assert(!sql.contains("idx_cursor"))
         // Verify CREATE INDEX statements are still present
         assert(
             sql.contains(
                 "CREATE INDEX IF NOT EXISTS \"idx_pk_test_table\" ON \"test_schema\".\"test_table\" (\"id\")"
             )
         )
-        assert(
-            sql.contains(
-                "CREATE INDEX IF NOT EXISTS \"idx_cursor_test_table_20f1cce2\" ON \"test_schema\".\"test_table\" (\"updated_at\")"
-            )
-        )
+
     }
 
     @Test
     fun testCursorIndexNameIsScopedToCursorColumn() {
         // The production incident: several connections write the same multi-tenant table with
-        // different cursors. Under the shared name they fought over one index, so every sync
+        // different cursors. Under one shared name they fought over a single index, so every sync
         // dropped the previous tenant's and recreated its own. Distinct names let them coexist.
         val tableName = TableName(namespace = "airbyte_etl", name = "auto_task_TimeEntries")
 
         val lastSyncSql =
-            postgresDirectLoadSqlGenerator.matchSchemas(
-                tableName,
-                columnsToAdd = emptySet(),
-                columnsToRemove = emptySet(),
-                columnsToModify = emptySet(),
-                columnsInDb = emptySet(),
-                recreatePrimaryKeyIndex = false,
-                primaryKeyColumnNames = emptyList(),
-                recreateCursorIndex = true,
-                cursorColumnName = "lastSync"
-            )
+            postgresDirectLoadSqlGenerator.createCursorIndexConcurrently("lastSync", tableName)
         val lastModifiedSql =
-            postgresDirectLoadSqlGenerator.matchSchemas(
-                tableName,
-                columnsToAdd = emptySet(),
-                columnsToRemove = emptySet(),
-                columnsToModify = emptySet(),
-                columnsInDb = emptySet(),
-                recreatePrimaryKeyIndex = false,
-                primaryKeyColumnNames = emptyList(),
-                recreateCursorIndex = true,
-                cursorColumnName = "lastModifiedDateTime"
+            postgresDirectLoadSqlGenerator.createCursorIndexConcurrently(
+                "lastModifiedDateTime",
+                tableName
             )
 
         assert(lastSyncSql.contains("idx_cursor_auto_task_TimeEntries_0ae8e34c"))
         assert(lastModifiedSql.contains("idx_cursor_auto_task_TimeEntries_c328d9b1"))
-        // Neither sync may touch the other cursor's index.
+        // Neither sync may name the other cursor's index.
         assert(!lastSyncSql.contains("idx_cursor_auto_task_TimeEntries_c328d9b1"))
         assert(!lastModifiedSql.contains("idx_cursor_auto_task_TimeEntries_0ae8e34c"))
     }
 
     @Test
-    fun testCursorIndexDropTargetsOnlyTheLegacySharedIndex() {
-        val tableName = TableName(namespace = "test_schema", name = "test_table")
+    fun testCursorIndexIsBuiltWithoutBlockingTheTable() {
+        val tableName = TableName(namespace = "airbyte_etl", name = "auto_task_TimeEntries")
 
         val sql =
+            postgresDirectLoadSqlGenerator.createCursorIndexConcurrently("lastSync", tableName)
+
+        // CONCURRENTLY keeps reads and writes running while the index is built.
+        assert(sql.contains("CREATE INDEX CONCURRENTLY IF NOT EXISTS"))
+        // It cannot run inside a transaction, so the statement must stand alone.
+        assert(!sql.contains("BEGIN TRANSACTION"))
+        assert(!sql.contains("COMMIT"))
+    }
+
+    @Test
+    fun testCursorIndexNeverDrops() {
+        // The whole point of the fix: a shared table with millions of rows must never see a DROP
+        // from a sync. Removing the legacy index is a one-off migration, not sync work.
+        val tableName = TableName(namespace = "airbyte_etl", name = "auto_task_TimeEntries")
+
+        val createSql =
+            postgresDirectLoadSqlGenerator.createCursorIndexConcurrently("lastSync", tableName)
+        assert(!createSql.contains("DROP INDEX"))
+
+        val schemaSql =
             postgresDirectLoadSqlGenerator.matchSchemas(
                 tableName,
-                columnsToAdd = emptySet(),
+                columnsToAdd = setOf(Column("new_col", "bigint")),
                 columnsToRemove = emptySet(),
                 columnsToModify = emptySet(),
                 columnsInDb = emptySet(),
                 recreatePrimaryKeyIndex = false,
                 primaryKeyColumnNames = emptyList(),
-                recreateCursorIndex = true,
-                cursorColumnName = "updated_at"
+                recreateCursorIndex = false,
+                cursorColumnName = null
             )
-
-        // Exactly one DROP, and it names the legacy index -- never the per-column one.
-        assert(sql.contains("DROP INDEX IF EXISTS \"test_schema\".\"idx_cursor_test_table\""))
-        assert(
-            !sql.contains("DROP INDEX IF EXISTS \"test_schema\".\"idx_cursor_test_table_20f1cce2\"")
-        )
+        assert(!schemaSql.contains("idx_cursor"))
     }
 
     @Test
     fun testMatchSchemasBoundsLockWait() {
-        // A blocked ACCESS EXCLUSIVE request queues every later statement on the table, reads
-        // included. The DDL must give up rather than stall the table.
+        // Remaining DDL (ALTER TABLE, primary-key index) still takes ACCESS EXCLUSIVE, and a
+        // blocked request queues every later statement on the table, reads included. Bound the
+        // wait so an unlucky sync fails instead of stalling the table.
         val tableName = TableName(namespace = "test_schema", name = "test_table")
 
         val sql =

@@ -218,13 +218,48 @@ class PostgresAirbyteClient(
                         shouldRecreatePrimaryKeyIndex(stream, tableName, columnNameMapping),
                 primaryKeyColumnNames =
                     postgresColumnUtils.getPrimaryKeysColumnNames(stream, columnNameMapping),
-                recreateCursorIndex =
-                    !isRawTablesMode &&
-                        shouldRecreateCursorIndex(stream, tableName, columnNameMapping),
-                cursorColumnName =
-                    postgresColumnUtils.getCursorColumnName(stream, columnNameMapping),
+                recreateCursorIndex = false,
+                cursorColumnName = null,
             )
         )
+
+        // Outside the transaction above: CONCURRENTLY cannot run inside one, and that is the whole
+        // point -- this table is shared by several connections, so the index must be built without
+        // taking ACCESS EXCLUSIVE on it.
+        if (!isRawTablesMode && shouldRecreateCursorIndex(stream, tableName, columnNameMapping)) {
+            createCursorIndexConcurrently(stream, tableName, columnNameMapping)
+        }
+    }
+
+    /**
+     * Builds the cursor index without blocking readers or writers.
+     *
+     * A failed CONCURRENTLY build leaves an INVALID index behind, which Postgres ignores when
+     * planning but which also blocks a later rebuild under the same name. Dropping it is itself
+     * ACCESS EXCLUSIVE work on a shared table, so this does not attempt cleanup: it logs and lets
+     * the sync continue. The index is an optimization, never a correctness requirement, and
+     * leaving the repair to an operator keeps an unlucky sync from stalling the table.
+     */
+    private fun createCursorIndexConcurrently(
+        stream: DestinationStream,
+        tableName: TableName,
+        columnNameMapping: ColumnNameMapping,
+    ) {
+        val cursorColumnName =
+            postgresColumnUtils.getCursorColumnName(stream, columnNameMapping) ?: return
+        val sql = sqlGenerator.createCursorIndexConcurrently(cursorColumnName, tableName)
+        if (sql.isEmpty()) {
+            return
+        }
+        try {
+            execute(sql)
+        } catch (e: Exception) {
+            log.warn(e) {
+                "Could not build cursor index on ${tableName.namespace}.${tableName.name} for " +
+                    "column $cursorColumnName. The sync continues without it; a failed " +
+                    "CONCURRENTLY build may leave an INVALID index that has to be dropped by hand."
+            }
+        }
     }
 
     override suspend fun discoverSchema(tableName: TableName): TableSchema {
