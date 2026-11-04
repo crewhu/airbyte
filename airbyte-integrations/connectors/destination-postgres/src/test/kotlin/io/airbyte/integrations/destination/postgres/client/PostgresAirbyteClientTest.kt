@@ -868,6 +868,7 @@ internal class PostgresAirbyteClientTest {
         every {
             sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any())
         } returns MOCK_SQL_QUERY
+        every { sqlGenerator.createCursorIndexConcurrently(any(), any()) } returns MOCK_SQL_QUERY
 
         every { postgresColumnUtils.defaultColumns() } returns emptyList()
         every { postgresColumnUtils.getTargetColumns(stream, columnNameMapping) } returns
@@ -891,6 +892,11 @@ internal class PostgresAirbyteClientTest {
                     recreatePrimaryKeyIndex = false,
                     primaryKeyColumnNames = emptyList(),
                 )
+            }
+            // The cursor index is built outside that transaction, CONCURRENTLY, so the shared
+            // table never takes ACCESS EXCLUSIVE from a sync.
+            verify(exactly = 1) {
+                sqlGenerator.createCursorIndexConcurrently("new_cursor", tableName)
             }
         }
     }
