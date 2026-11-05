@@ -869,6 +869,8 @@ internal class PostgresAirbyteClientTest {
             sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any())
         } returns MOCK_SQL_QUERY
         every { sqlGenerator.createCursorIndexConcurrently(any(), any()) } returns MOCK_SQL_QUERY
+        every { sqlGenerator.createCursorIndexStatement(any(), any()) } returns MOCK_SQL_QUERY
+        every { sqlGenerator.isTempTable(stream, tableName) } returns false
 
         every { postgresColumnUtils.defaultColumns() } returns emptyList()
         every { postgresColumnUtils.getTargetColumns(stream, columnNameMapping) } returns
@@ -898,6 +900,69 @@ internal class PostgresAirbyteClientTest {
             verify(exactly = 1) {
                 sqlGenerator.createCursorIndexConcurrently("new_cursor", tableName)
             }
+            verify(exactly = 0) { sqlGenerator.createCursorIndexStatement(any(), any()) }
+        }
+    }
+
+    @Test
+    fun testEnsureSchemaMatchesBuildsTempTableCursorIndexWithoutConcurrently() {
+        // A temp table is visible only to the sync that created it. CONCURRENTLY would buy nothing
+        // there and would make the build wait on every older transaction in the database, so the
+        // plain blocking build is used instead.
+        val stream = mockk<DestinationStream>()
+        val tableName = TableName(namespace = "test_ns", name = "test_table_tmp")
+        val columnNameMapping = mockk<ColumnNameMapping>(relaxed = true)
+
+        val resultSet = mockk<ResultSet>()
+        every { resultSet.next() } returns false
+        every { resultSet.close() } just Runs
+
+        val pkResultSet = mockk<ResultSet>()
+        every { pkResultSet.next() } returns false
+        every { pkResultSet.close() } just Runs
+
+        val cursorResultSet = mockk<ResultSet>()
+        every { cursorResultSet.next() } returns true andThen false
+        every { cursorResultSet.getString("column_name") } returns "old_cursor"
+        every { cursorResultSet.close() } just Runs
+
+        val statement =
+            mockk<Statement> {
+                every { executeQuery(any()) } returns
+                    resultSet andThen
+                    pkResultSet andThen
+                    cursorResultSet
+                every { execute(any()) } returns true
+                every { close() } just Runs
+            }
+
+        val connection = mockk<Connection>()
+        every { connection.createStatement() } returns statement
+        every { connection.close() } just Runs
+
+        every { dataSource.connection } returns connection
+        every { sqlGenerator.getTableSchema(tableName) } returns MOCK_SQL_QUERY
+        every { sqlGenerator.getPrimaryKeyIndexColumns(tableName) } returns MOCK_SQL_QUERY
+        every { sqlGenerator.getCursorIndexColumn(tableName, any()) } returns MOCK_SQL_QUERY
+        every {
+            sqlGenerator.matchSchemas(any(), any(), any(), any(), any(), any(), any())
+        } returns MOCK_SQL_QUERY
+        every { sqlGenerator.createCursorIndexConcurrently(any(), any()) } returns MOCK_SQL_QUERY
+        every { sqlGenerator.createCursorIndexStatement(any(), any()) } returns MOCK_SQL_QUERY
+        every { sqlGenerator.isTempTable(stream, tableName) } returns true
+
+        every { postgresColumnUtils.defaultColumns() } returns emptyList()
+        every { postgresColumnUtils.getTargetColumns(stream, columnNameMapping) } returns
+            listOf(Column("col1", "text"))
+        every { postgresColumnUtils.getPrimaryKeysColumnNames(stream, columnNameMapping) } returns
+            emptyList()
+        every { postgresColumnUtils.getCursorColumnName(stream, columnNameMapping) } returns
+            "new_cursor"
+
+        runBlocking {
+            client.ensureSchemaMatches(stream, tableName, columnNameMapping)
+            verify(exactly = 1) { sqlGenerator.createCursorIndexStatement("new_cursor", tableName) }
+            verify(exactly = 0) { sqlGenerator.createCursorIndexConcurrently(any(), any()) }
         }
     }
 

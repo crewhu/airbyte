@@ -222,15 +222,25 @@ class PostgresAirbyteClient(
         )
 
         // Outside the transaction above: CONCURRENTLY cannot run inside one, and that is the whole
-        // point -- this table is shared by several connections, so the index must be built without
-        // taking ACCESS EXCLUSIVE on it.
+        // point -- the final table is shared by several connections, so the index must be built
+        // without taking ACCESS EXCLUSIVE on it. A temp table has no such readers, so it gets the
+        // plain build instead; see [createCursorIndex].
         if (!isRawTablesMode && shouldRecreateCursorIndex(stream, tableName, columnNameMapping)) {
-            createCursorIndexConcurrently(stream, tableName, columnNameMapping)
+            createCursorIndex(stream, tableName, columnNameMapping)
         }
     }
 
     /**
-     * Builds the cursor index without blocking readers or writers.
+     * Builds the cursor index, picking the build strategy from who else can see the table.
+     *
+     * CONCURRENTLY is only worth its cost on the shared final table, where other connections are
+     * reading and writing throughout the sync. It avoids ACCESS EXCLUSIVE, but pays for that by
+     * waiting for every transaction older than itself to finish -- across the whole database, not
+     * just this table. A long-running analytics query therefore stalls the build indefinitely, and
+     * several syncs can pile up behind the same snapshot.
+     *
+     * A temp table is visible only to the sync that created it, so there is nothing to block and
+     * nothing to wait for: a plain CREATE INDEX takes the uncontended lock and returns immediately.
      *
      * A failed CONCURRENTLY build leaves an INVALID index behind, which Postgres ignores when
      * planning but which also blocks a later rebuild under the same name. Dropping it is itself
@@ -238,24 +248,36 @@ class PostgresAirbyteClient(
      * the sync continue. The index is an optimization, never a correctness requirement, and
      * leaving the repair to an operator keeps an unlucky sync from stalling the table.
      */
-    private fun createCursorIndexConcurrently(
+    private fun createCursorIndex(
         stream: DestinationStream,
         tableName: TableName,
         columnNameMapping: ColumnNameMapping,
     ) {
         val cursorColumnName =
             postgresColumnUtils.getCursorColumnName(stream, columnNameMapping) ?: return
-        val sql = sqlGenerator.createCursorIndexConcurrently(cursorColumnName, tableName)
+        val concurrently = !sqlGenerator.isTempTable(stream, tableName)
+        val sql =
+            if (concurrently) {
+                sqlGenerator.createCursorIndexConcurrently(cursorColumnName, tableName)
+            } else {
+                sqlGenerator.createCursorIndexStatement(cursorColumnName, tableName)
+            }
         if (sql.isEmpty()) {
             return
         }
         try {
             execute(sql)
         } catch (e: Exception) {
+            val concurrentlyNote =
+                if (concurrently) {
+                    " A failed CONCURRENTLY build may leave an INVALID index that has to be " +
+                        "dropped by hand."
+                } else {
+                    ""
+                }
             log.warn(e) {
                 "Could not build cursor index on ${tableName.namespace}.${tableName.name} for " +
-                    "column $cursorColumnName. The sync continues without it; a failed " +
-                    "CONCURRENTLY build may leave an INVALID index that has to be dropped by hand."
+                    "column $cursorColumnName. The sync continues without it.$concurrentlyNote"
             }
         }
     }

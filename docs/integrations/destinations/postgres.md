@@ -298,6 +298,7 @@ _where_ it is deployed.
 
 | Version | Date       | Pull Request                                               | Subject                                                                                                                                                                                |
 |:--------|:-----------|:-----------------------------------------------------------|:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 3.0.5-crewhu.11 | 2026-11-05 | Crewhu fork (not upstream) | Automated release from branch fix/cursor-index-skip-concurrently-on-temp-tables. |
 | 3.0.5-crewhu.10 | 2026-10-26 | Crewhu fork (not upstream) | Automated release from branch perf/initial-status-existence-probe. |
 | 3.0.5-crewhu.8 | 2026-09-16 | Crewhu fork (not upstream) | Automated release from branch bugfix/fix_temp_table_collision/lifecycle_finalize. |
 | 3.0.5-crewhu.5 | 2026-09-16 | Crewhu fork (not upstream) | Automated release from branch bugfix/fix_temp_table_collision/lifecycle_finalize. |

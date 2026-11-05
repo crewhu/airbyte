@@ -134,7 +134,7 @@ class PostgresDirectLoadSqlGenerator(
      * derived from it during a truncate refresh, whose names are opaque hashes and so cannot be
      * recognized by suffix.
      */
-    private fun isTempTable(stream: DestinationStream, tableName: TableName): Boolean {
+    internal fun isTempTable(stream: DestinationStream, tableName: TableName): Boolean {
         val finalTableName = stream.tableSchema.tableNames.finalTableName ?: return false
         return tableName != finalTableName
     }
@@ -217,7 +217,14 @@ class PostgresDirectLoadSqlGenerator(
         }
             ?: ""
 
-    private fun createCursorIndexStatement(
+    /**
+     * Creates this stream's cursor index with a plain, blocking build.
+     *
+     * This is the right choice for a table only this sync can see: the ACCESS EXCLUSIVE lock is
+     * uncontended, so the build is immediate and -- unlike [createCursorIndexConcurrently] -- it
+     * never waits on unrelated long-running transactions elsewhere in the database.
+     */
+    internal fun createCursorIndexStatement(
         cursorColumnName: String?,
         tableName: TableName
     ): String {
