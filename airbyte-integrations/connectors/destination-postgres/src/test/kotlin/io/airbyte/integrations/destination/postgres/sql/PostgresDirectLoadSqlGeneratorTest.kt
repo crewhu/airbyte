@@ -358,6 +358,24 @@ internal class PostgresDirectLoadSqlGeneratorTest {
         assertEqualsWithTrimIndent(expected, sql)
     }
 
+    @Test
+    fun testOverwriteTableAcrossSchemasMovesBeforeRenaming() {
+        val sourceTableName = TableName(namespace = "airbyte_tmp", name = "source")
+        val targetTableName = TableName(namespace = "namespace", name = "target")
+        val sql = postgresDirectLoadSqlGenerator.overwriteTable(sourceTableName, targetTableName)
+
+        val expected =
+            """
+            BEGIN TRANSACTION;
+            DROP TABLE IF EXISTS "namespace"."target";
+            ALTER TABLE "airbyte_tmp"."source" SET SCHEMA "namespace";
+            ALTER TABLE "namespace"."source" RENAME TO "target";
+            COMMIT;
+        """
+
+        assertEqualsWithTrimIndent(expected, sql)
+    }
+
     private fun assertEqualsWithTrimIndent(expected: String, actual: String) {
         assertEquals(expected.trimIndent(), actual.trimIndent())
     }

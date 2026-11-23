@@ -25,6 +25,11 @@ data class PostgresConfiguration(
     val internalTableSchema: String?,
     val dropCascade: Boolean?,
     val unconstrainedNumber: Boolean?,
+    /**
+     * Dedicated schema for temp tables, or null to keep them next to their final table. Always null
+     * in legacy raw tables mode, where temp tables already live in [internalTableSchema].
+     */
+    val tempTableSchema: String?,
     val tunnelMethod: SshTunnelMethodConfiguration?,
 ) : DestinationConfiguration()
 
@@ -63,6 +68,12 @@ class PostgresConfigurationFactory :
                 },
             dropCascade = spec.dropCascade ?: false,
             unconstrainedNumber = spec.unconstrainedNumber ?: false,
+            tempTableSchema =
+                if (spec.legacyRawTablesOnly == true) {
+                    null
+                } else {
+                    spec.tempTableSchema?.trim()?.takeIf { it.isNotEmpty() }
+                },
             tunnelMethod = spec.getTunnelMethodValue()
         )
     }

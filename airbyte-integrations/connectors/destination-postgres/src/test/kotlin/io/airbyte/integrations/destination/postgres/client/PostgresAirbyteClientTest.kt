@@ -37,6 +37,7 @@ internal class PostgresAirbyteClientTest {
     private lateinit var sqlGenerator: PostgresDirectLoadSqlGenerator
     private lateinit var postgresColumnUtils: PostgresColumnUtils
     private lateinit var postgresConfiguration: PostgresConfiguration
+    private lateinit var tempTableRegistry: PostgresTempTableRegistry
 
     companion object {
         private const val MOCK_SQL_QUERY = "MOCK_SQL_QUERY"
@@ -49,12 +50,15 @@ internal class PostgresAirbyteClientTest {
         postgresColumnUtils = mockk()
         postgresConfiguration = mockk()
         every { postgresConfiguration.legacyRawTablesOnly } returns false
+        // Relaxed: tracks() answers false, so by default no table is treated as a temp table.
+        tempTableRegistry = mockk(relaxed = true)
         client =
             PostgresAirbyteClient(
                 dataSource,
                 sqlGenerator,
                 postgresColumnUtils,
-                postgresConfiguration
+                postgresConfiguration,
+                tempTableRegistry,
             )
     }
 
@@ -279,6 +283,137 @@ internal class PostgresAirbyteClientTest {
             verify(exactly = 2) { statement.execute(any()) }
             verify(exactly = 2) { mockConnection.close() }
         }
+    }
+
+    @Test
+    fun testCreateTableRecordsANewTempTable() {
+        val stream = mockk<DestinationStream>()
+        val tableName = TableName(namespace = "airbyte_tmp", name = "temp")
+        val columnNameMapping = mockk<ColumnNameMapping>(relaxed = true)
+        val statement =
+            mockk<Statement> {
+                every { execute(any()) } returns true
+                every { close() } just Runs
+            }
+        every { dataSource.connection } returns
+            mockk<Connection> {
+                every { close() } just Runs
+                every { createStatement() } returns statement
+            }
+        every { sqlGenerator.createTable(stream, tableName, columnNameMapping, true) } returns
+            Pair(MOCK_SQL_QUERY, "")
+        every { tempTableRegistry.tracks(tableName) } returns true
+
+        runBlocking {
+            client.createTable(stream, tableName, columnNameMapping, replace = true)
+        }
+
+        verify(exactly = 1) { tempTableRegistry.recordUse(stream, tableName, newlyCreated = true) }
+    }
+
+    @Test
+    fun testCreateTableRecordsAReusedTempTableWithoutResettingItsCreation() {
+        val stream = mockk<DestinationStream>()
+        val tableName = TableName(namespace = "airbyte_tmp", name = "temp")
+        val columnNameMapping = mockk<ColumnNameMapping>(relaxed = true)
+        val existsResultSet =
+            mockk<ResultSet> {
+                every { next() } returns true
+                every { getBoolean(1) } returns true
+                every { close() } just Runs
+            }
+        val statement =
+            mockk<Statement> {
+                every { execute(any()) } returns true
+                every { executeQuery(any()) } returns existsResultSet
+                every { close() } just Runs
+            }
+        every { dataSource.connection } returns
+            mockk<Connection> {
+                every { close() } just Runs
+                every { createStatement() } returns statement
+            }
+        every { sqlGenerator.createTable(stream, tableName, columnNameMapping, false) } returns
+            Pair(MOCK_SQL_QUERY, "")
+        every { tempTableRegistry.tracks(tableName) } returns true
+
+        runBlocking {
+            client.createTable(stream, tableName, columnNameMapping, replace = false)
+        }
+
+        verify(exactly = 1) { tempTableRegistry.recordUse(stream, tableName, newlyCreated = false) }
+    }
+
+    @Test
+    fun testCreateTableDoesNotRecordAFinalTable() {
+        val stream = mockk<DestinationStream>()
+        val tableName = TableName(namespace = "namespace", name = "name")
+        val columnNameMapping = mockk<ColumnNameMapping>(relaxed = true)
+        val statement =
+            mockk<Statement> {
+                every { execute(any()) } returns true
+                every { close() } just Runs
+            }
+        every { dataSource.connection } returns
+            mockk<Connection> {
+                every { close() } just Runs
+                every { createStatement() } returns statement
+            }
+        every { sqlGenerator.createTable(stream, tableName, columnNameMapping, false) } returns
+            Pair(MOCK_SQL_QUERY, "")
+        every { tempTableRegistry.tracks(tableName) } returns false
+
+        runBlocking {
+            client.createTable(stream, tableName, columnNameMapping, replace = false)
+        }
+
+        verify(exactly = 0) { tempTableRegistry.recordUse(any(), any(), any()) }
+        // No existence probe either: the extra query is only paid for temp tables.
+        verify(exactly = 0) { statement.executeQuery(any()) }
+    }
+
+    @Test
+    fun testOverwriteTableRemovesThePromotedTempTableFromTheRegistry() {
+        val sourceTableName = TableName(namespace = "airbyte_tmp", name = "temp")
+        val targetTableName = TableName(namespace = "target_ns", name = "target")
+        val statement =
+            mockk<Statement> {
+                every { execute(any()) } returns true
+                every { close() } just Runs
+            }
+        every { dataSource.connection } returns
+            mockk<Connection> {
+                every { close() } just Runs
+                every { createStatement() } returns statement
+            }
+        every { sqlGenerator.overwriteTable(sourceTableName, targetTableName) } returns
+            MOCK_SQL_QUERY
+        every { tempTableRegistry.tracks(sourceTableName) } returns true
+
+        runBlocking { client.overwriteTable(sourceTableName, targetTableName) }
+
+        verify(exactly = 1) { tempTableRegistry.recordRemoval(sourceTableName) }
+    }
+
+    @Test
+    fun testDropTableRemovesTheTempTableFromTheRegistry() {
+        val tableName = TableName(namespace = "airbyte_tmp", name = "temp")
+        val statement =
+            mockk<Statement> {
+                every { execute(any()) } returns true
+                every { close() } just Runs
+            }
+        every { dataSource.connection } returns
+            mockk<Connection> {
+                every { close() } just Runs
+                every { createStatement() } returns statement
+            }
+        every { sqlGenerator.dropTable(tableName) } returns MOCK_SQL_QUERY
+        every { tempTableRegistry.tracks(tableName) } returns true
+
+        runBlocking { client.dropTable(tableName) }
+
+        verify(exactly = 1) { tempTableRegistry.recordRemoval(tableName) }
     }
 
     @Test

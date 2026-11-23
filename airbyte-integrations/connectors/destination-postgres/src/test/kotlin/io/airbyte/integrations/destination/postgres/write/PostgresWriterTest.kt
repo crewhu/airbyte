@@ -20,9 +20,11 @@ import io.airbyte.cdk.load.table.directload.DirectLoadTableDedupStreamLoader
 import io.airbyte.cdk.load.table.directload.DirectLoadTableExecutionConfig
 import io.airbyte.cdk.load.write.StreamStateStore
 import io.airbyte.integrations.destination.postgres.client.PostgresAirbyteClient
+import io.airbyte.integrations.destination.postgres.client.PostgresTempTableRegistry
 import io.airbyte.integrations.destination.postgres.spec.PostgresConfiguration
 import io.mockk.Runs
 import io.mockk.coEvery
+import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -40,6 +42,7 @@ class PostgresWriterTest {
     private lateinit var postgresClient: PostgresAirbyteClient
     private lateinit var tempTableNameGenerator: TempTableNameGenerator
     private lateinit var postgresConfiguration: PostgresConfiguration
+    private lateinit var tempTableRegistry: PostgresTempTableRegistry
 
     @BeforeEach
     fun setup() {
@@ -49,6 +52,8 @@ class PostgresWriterTest {
         postgresClient = mockk()
         tempTableNameGenerator = mockk()
         postgresConfiguration = mockk()
+        tempTableRegistry = mockk()
+        every { tempTableRegistry.schema } returns null
 
         writer =
             PostgresWriter(
@@ -57,7 +62,8 @@ class PostgresWriterTest {
                 streamStateStore,
                 postgresClient,
                 tempTableNameGenerator,
-                postgresConfiguration
+                postgresConfiguration,
+                tempTableRegistry,
             )
     }
 
@@ -190,4 +196,38 @@ class PostgresWriterTest {
 
         assertTrue(loader is DirectLoadTableAppendStreamLoader)
     }
+
+    @Test
+    fun `setup prepares the temp table schema and its registry before the final schemas`() =
+        runBlocking {
+            val stream = mockk<DestinationStream>()
+            every { stream.tableSchema } returns
+                StreamTableSchema(
+                    TableNames(
+                        finalTableName = TableName("ns", "name"),
+                        tempTableName = TableName("airbyte_tmp", "temp_name"),
+                    ),
+                    ColumnSchema(
+                        inputSchema = emptyMap(),
+                        inputToFinalColumnNames = emptyMap(),
+                        finalSchema = emptyMap()
+                    ),
+                    Dedupe(primaryKey = emptyList(), cursor = emptyList()),
+                )
+            every { catalog.streams } returns listOf(stream)
+            every { tempTableRegistry.schema } returns "airbyte_tmp"
+            every { tempTableRegistry.requireDedicatedSchema(any()) } just Runs
+            every { tempTableRegistry.createRegistryTable() } just Runs
+            coEvery { postgresClient.createNamespace(any()) } just Runs
+            coEvery { stateGatherer.gatherInitialStatus() } returns emptyMap()
+
+            writer.setup()
+
+            coVerifyOrder {
+                tempTableRegistry.requireDedicatedSchema(listOf("ns"))
+                postgresClient.createNamespace("airbyte_tmp")
+                tempTableRegistry.createRegistryTable()
+                postgresClient.createNamespace("ns")
+            }
+        }
 }
