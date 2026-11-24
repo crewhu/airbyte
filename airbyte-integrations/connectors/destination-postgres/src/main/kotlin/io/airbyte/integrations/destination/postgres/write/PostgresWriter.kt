@@ -21,6 +21,7 @@ import io.airbyte.cdk.load.write.DestinationWriter
 import io.airbyte.cdk.load.write.StreamLoader
 import io.airbyte.cdk.load.write.StreamStateStore
 import io.airbyte.integrations.destination.postgres.client.PostgresAirbyteClient
+import io.airbyte.integrations.destination.postgres.client.PostgresTempTableRegistry
 import io.airbyte.integrations.destination.postgres.spec.PostgresConfiguration
 import io.github.oshai.kotlinlogging.KotlinLogging
 import jakarta.inject.Singleton
@@ -35,10 +36,19 @@ class PostgresWriter(
     private val postgresClient: PostgresAirbyteClient,
     private val tempTableNameGenerator: TempTableNameGenerator,
     private val postgresConfiguration: PostgresConfiguration,
+    private val tempTableRegistry: PostgresTempTableRegistry,
 ) : DestinationWriter {
     private lateinit var initialStatuses: Map<DestinationStream, DirectLoadInitialStatus>
 
     override suspend fun setup() {
+        tempTableRegistry.schema?.let { tempTableSchema ->
+            tempTableRegistry.requireDedicatedSchema(
+                catalog.streams.map { it.tableSchema.tableNames.finalTableName!!.namespace }
+            )
+            postgresClient.createNamespace(tempTableSchema)
+            tempTableRegistry.createRegistryTable()
+        }
+
         catalog.streams
             .map { it.tableSchema.tableNames.finalTableName!!.namespace }
             .forEach { postgresClient.createNamespace(it) }

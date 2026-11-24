@@ -49,7 +49,10 @@ class PostgresBeanFactory {
     fun tempTableNameGenerator(
         postgresConfig: PostgresConfiguration,
     ): TempTableNameGenerator =
-        DefaultTempTableNameGenerator(internalNamespace = postgresConfig.internalTableSchema)
+        DefaultTempTableNameGenerator(
+            internalNamespace =
+                postgresConfig.tempTableSchema ?: postgresConfig.internalTableSchema
+        )
 
     @Singleton
     fun postgresConfiguration(

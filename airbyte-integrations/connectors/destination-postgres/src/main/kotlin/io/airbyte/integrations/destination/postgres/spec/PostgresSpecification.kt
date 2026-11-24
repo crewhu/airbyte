@@ -41,6 +41,7 @@ sealed class PostgresSpecification : ConfigurationSpecification() {
     abstract val legacyRawTablesOnly: Boolean?
     abstract val dropCascade: Boolean?
     abstract val unconstrainedNumber: Boolean?
+    abstract val tempTableSchema: String?
     abstract fun getTunnelMethodValue(): SshTunnelMethodConfiguration?
 }
 
@@ -171,6 +172,16 @@ class PostgresSpecificationOss : PostgresSpecification() {
     @get:JsonSchemaInject(json = """{"group": "connection", "order": 13}""")
     @Suppress("RedundantNullableReturnType")
     override val unconstrainedNumber: Boolean? = false
+
+    @get:JsonSchemaTitle("Temporary Tables Schema")
+    @get:JsonPropertyDescription(
+        """Schema where Airbyte stages data in temporary tables before moving it to the final tables. When set, every temporary table is created in this schema instead of next to its final table, and a registry table (_airbyte_temp_tables) in the same schema records which job created each one and when. The schema must not be used by any final table. Leave empty to keep temporary tables in the same schema as the final tables. Ignored when final tables are disabled."""
+    )
+    @get:JsonProperty("temp_table_schema")
+    @get:JsonSchemaInject(
+        json = """{"group": "connection", "order": 15, "examples": ["airbyte_tmp"]}"""
+    )
+    override val tempTableSchema: String? = null
 
     @JsonIgnore
     @ConfigurationBuilder(configurationPrefix = "tunnel_method")
@@ -321,6 +332,16 @@ class PostgresSpecificationCloud : PostgresSpecification() {
     @get:JsonSchemaInject(json = """{"group": "connection", "order": 13}""")
     @Suppress("RedundantNullableReturnType")
     override val unconstrainedNumber: Boolean? = false
+
+    @get:JsonSchemaTitle("Temporary Tables Schema")
+    @get:JsonPropertyDescription(
+        """Schema where Airbyte stages data in temporary tables before moving it to the final tables. When set, every temporary table is created in this schema instead of next to its final table, and a registry table (_airbyte_temp_tables) in the same schema records which job created each one and when. The schema must not be used by any final table. Leave empty to keep temporary tables in the same schema as the final tables. Ignored when final tables are disabled."""
+    )
+    @get:JsonProperty("temp_table_schema")
+    @get:JsonSchemaInject(
+        json = """{"group": "connection", "order": 15, "examples": ["airbyte_tmp"]}"""
+    )
+    override val tempTableSchema: String? = null
 
     @JsonIgnore
     @ConfigurationBuilder(configurationPrefix = "tunnel_method")

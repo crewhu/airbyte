@@ -20,6 +20,7 @@ import io.airbyte.cdk.load.schema.model.TableName
 import io.airbyte.cdk.load.schema.model.TableNames
 import io.airbyte.cdk.load.table.ColumnNameMapping
 import io.airbyte.integrations.destination.postgres.client.PostgresAirbyteClient
+import io.airbyte.integrations.destination.postgres.client.PostgresTempTableRegistry
 import io.airbyte.integrations.destination.postgres.spec.PostgresConfiguration
 import io.airbyte.integrations.destination.postgres.write.load.PostgresInsertBuffer
 import io.micronaut.context.annotation.Requires
@@ -35,6 +36,7 @@ internal const val CHECK_COLUMN_NAME = "test_key"
 class PostgresOssChecker(
     private val postgresAirbyteClient: PostgresAirbyteClient,
     private val postgresConfiguration: PostgresConfiguration,
+    private val tempTableRegistry: PostgresTempTableRegistry,
 ) : DestinationCheckerV2 {
 
     override fun check() {
@@ -87,6 +89,12 @@ class PostgresOssChecker(
         runBlocking {
             try {
                 postgresAirbyteClient.createNamespace(outputSchema)
+                // Fail the check, not the first sync, when the temp schema cannot be prepared.
+                tempTableRegistry.schema?.let { tempTableSchema ->
+                    tempTableRegistry.requireDedicatedSchema(listOf(outputSchema))
+                    postgresAirbyteClient.createNamespace(tempTableSchema)
+                    tempTableRegistry.createRegistryTable()
+                }
                 postgresAirbyteClient.createTable(
                     stream = destinationStream,
                     tableName = qualifiedTableName,

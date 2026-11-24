@@ -243,11 +243,33 @@ class PostgresDirectLoadSqlGenerator(
     private fun getExtractedAtIndexName(tableName: TableName): String =
         quoteIdentifier(postgresColumnUtils.getExtractedAtIndexName(tableName))
 
+    /**
+     * Replaces [targetTableName] with [sourceTableName].
+     *
+     * RENAME cannot move a table to another schema, so when the source lives elsewhere -- a temp
+     * table in the dedicated temp schema -- it is first moved with SET SCHEMA and then renamed.
+     * Both are catalog-only changes: no rows are rewritten, and the table keeps its indexes and
+     * its privileges. The move happens before the rename because the temp name is a unique hash
+     * and cannot collide with anything in the target schema, whereas renaming first could collide
+     * with another stream's temp table.
+     */
     fun overwriteTable(sourceTableName: TableName, targetTableName: TableName): String {
+        val moveToTargetSchemaStatement =
+            if (sourceTableName.namespace != targetTableName.namespace) {
+                "ALTER TABLE ${getFullyQualifiedName(sourceTableName)} SET SCHEMA ${getNamespace(targetTableName)};"
+            } else {
+                null
+            }
+        val tableToRename = TableName(targetTableName.namespace, sourceTableName.name)
+        val statements =
+            listOfNotNull(
+                "DROP TABLE IF EXISTS ${getFullyQualifiedName(targetTableName)}$dropTableSuffix;",
+                moveToTargetSchemaStatement,
+                "ALTER TABLE ${getFullyQualifiedName(tableToRename)} RENAME TO ${getName(targetTableName)};",
+            )
         return """
             BEGIN TRANSACTION;
-            DROP TABLE IF EXISTS ${getFullyQualifiedName(targetTableName)}$dropTableSuffix;
-            ALTER TABLE ${getFullyQualifiedName(sourceTableName)} RENAME TO ${getName(targetTableName)};
+            ${statements.joinToString("\n            ")}
             COMMIT;
             """
     }

@@ -39,7 +39,8 @@ class PostgresAirbyteClient(
     private val dataSource: DataSource,
     private val sqlGenerator: PostgresDirectLoadSqlGenerator,
     private val postgresColumnUtils: PostgresColumnUtils,
-    private val postgresConfiguration: PostgresConfiguration
+    private val postgresConfiguration: PostgresConfiguration,
+    private val tempTableRegistry: PostgresTempTableRegistry,
 ) : TableSchemaEvolutionClient, TableOperationsClient {
 
     companion object {
@@ -122,6 +123,10 @@ class PostgresAirbyteClient(
     ) {
         val (createTableSql, createIndexesSql) =
             sqlGenerator.createTable(stream, tableName, columnNameMapping, replace)
+        // CREATE TABLE IF NOT EXISTS does not say whether it created anything, so the registry
+        // needs to know up front if this call reuses a temp table left by an earlier sync.
+        val isTrackedTempTable = tempTableRegistry.tracks(tableName)
+        val reusesExistingTable = isTrackedTempTable && !replace && tableExists(tableName)
         try {
             execute(createTableSql)
         } catch (e: org.postgresql.util.PSQLException) {
@@ -154,10 +159,17 @@ class PostgresAirbyteClient(
                 throw e
             }
         }
+        if (isTrackedTempTable) {
+            tempTableRegistry.recordUse(stream, tableName, newlyCreated = !reusesExistingTable)
+        }
     }
 
     override suspend fun overwriteTable(sourceTableName: TableName, targetTableName: TableName) {
         execute(sqlGenerator.overwriteTable(sourceTableName, targetTableName))
+        // The source no longer exists under its temp name: it became the target.
+        if (tempTableRegistry.tracks(sourceTableName)) {
+            tempTableRegistry.recordRemoval(sourceTableName)
+        }
     }
 
     override suspend fun copyTable(
@@ -181,6 +193,9 @@ class PostgresAirbyteClient(
 
     override suspend fun dropTable(tableName: TableName) {
         execute(sqlGenerator.dropTable(tableName))
+        if (tempTableRegistry.tracks(tableName)) {
+            tempTableRegistry.recordRemoval(tableName)
+        }
     }
 
     override suspend fun ensureSchemaMatches(

@@ -239,6 +239,14 @@
         "group" : "connection",
         "order" : 13
       },
+      "temp_table_schema" : {
+        "type" : "string",
+        "description" : "Schema where Airbyte stages data in temporary tables before moving it to the final tables. When set, every temporary table is created in this schema instead of next to its final table, and a registry table (_airbyte_temp_tables) in the same schema records which job created each one and when. The schema must not be used by any final table. Leave empty to keep temporary tables in the same schema as the final tables. Ignored when final tables are disabled.",
+        "title" : "Temporary Tables Schema",
+        "group" : "connection",
+        "order" : 15,
+        "examples" : [ "airbyte_tmp" ]
+      },
       "tunnel_method" : {
         "oneOf" : [ {
           "title" : "No Tunnel",

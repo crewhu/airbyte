@@ -8,6 +8,7 @@ import io.airbyte.cdk.load.command.DestinationStream
 import io.airbyte.cdk.load.schema.model.TableName
 import io.airbyte.cdk.load.table.ColumnNameMapping
 import io.airbyte.integrations.destination.postgres.client.PostgresAirbyteClient
+import io.airbyte.integrations.destination.postgres.client.PostgresTempTableRegistry
 import io.airbyte.integrations.destination.postgres.spec.PostgresConfiguration
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -22,12 +23,15 @@ internal class PostgresOssCheckerTest {
     private lateinit var checker: PostgresOssChecker
     private lateinit var postgresAirbyteClient: PostgresAirbyteClient
     private lateinit var postgresConfiguration: PostgresConfiguration
+    private lateinit var tempTableRegistry: PostgresTempTableRegistry
 
     @BeforeEach
     fun setup() {
         postgresAirbyteClient = mockk(relaxed = true)
         postgresConfiguration = mockk()
-        checker = PostgresOssChecker(postgresAirbyteClient, postgresConfiguration)
+        tempTableRegistry = mockk()
+        every { tempTableRegistry.schema } returns null
+        checker = PostgresOssChecker(postgresAirbyteClient, postgresConfiguration, tempTableRegistry)
     }
 
     @Test
